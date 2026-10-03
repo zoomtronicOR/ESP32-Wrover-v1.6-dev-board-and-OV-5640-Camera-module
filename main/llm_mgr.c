@@ -21,8 +21,8 @@ static const char *TAG = "llm";
 
 #define RESP_MAX (32 * 1024)
 #define DEFAULT_PROMPT                                                                                       \
-    "Ovo je snimak sa sigurnosne kamere. U jednoj kratkoj recenici na srpskom opisi sta se desava. Navedi " \
-    "da li su prisutni osoba, vozilo ili zivotinja."
+    "Ovo je snimak sa sigurnosne kamere. U jednoj kratkoj rečenici na srpskom opiši šta se dešava. Navedi " \
+    "da li su prisutni osoba, vozilo ili životinja."
 
 typedef enum { API_OLLAMA = 0, API_OPENAI = 1 } llm_api_t;
 
