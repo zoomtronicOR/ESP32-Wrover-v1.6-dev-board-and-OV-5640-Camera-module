@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "ai_mgr.h"
 #include "event_mgr.h"
 #include "motion_mgr.h"
 #include "mqtt_mgr.h"
@@ -173,13 +174,14 @@ cJSON *web_status_json(void)
     cJSON_AddNumberToObject(c, "stream_clients", s_stream_clients);
 
     cJSON_AddItemToObject(o, "motion", motion_mgr_state_json());
+    cJSON_AddItemToObject(o, "ai", ai_mgr_state_json());
 
     // Modules from later phases report their state here once implemented.
     cJSON *m = cJSON_AddObjectToObject(o, "modules");
     cJSON_AddStringToObject(m, "mqtt", mqtt_mgr_state());
     cJSON_AddStringToObject(m, "ha", mqtt_mgr_ha_state());
     cJSON_AddStringToObject(m, "sd", "n/a");
-    cJSON_AddStringToObject(m, "ai", "off");
+    cJSON_AddStringToObject(m, "ai", ai_mgr_state());
     cJSON_AddStringToObject(m, "motion", motion_mgr_active() ? "active" : "idle");
     cJSON_AddStringToObject(m, "ota", "n/a");
     return o;
@@ -425,6 +427,32 @@ static esp_err_t motion_debug_get(httpd_req_t *req)
     return send_json(req, motion_mgr_debug_json(), NULL);
 }
 
+static esp_err_t ai_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "config", ai_mgr_config_json());
+    cJSON_AddItemToObject(o, "state", ai_mgr_state_json());
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t ai_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!cJSON_IsObject(body)) {
+        cJSON_Delete(body);
+        return send_result(req, ESP_ERR_INVALID_ARG, "expected a JSON object");
+    }
+    char err[96] = "";
+    esp_err_t e = ai_mgr_set_config(body, err, sizeof(err));
+    cJSON_Delete(body);
+    return send_result(req, e, err[0] ? err : NULL);
+}
+
+static esp_err_t ai_test_post(httpd_req_t *req)
+{
+    return send_json(req, ai_mgr_test_json(), NULL);
+}
+
 static esp_err_t events_get(httpd_req_t *req)
 {
     char q[32], v[8];
@@ -625,7 +653,7 @@ esp_err_t web_server_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     cfg.ctrl_port = 32768;
-    cfg.max_uri_handlers = 32;
+    cfg.max_uri_handlers = 40;
     cfg.max_open_sockets = 7;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
@@ -656,6 +684,9 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/motion", HTTP_GET, motion_get);
     reg(s_api, "/api/motion", HTTP_POST, motion_post);
     reg(s_api, "/api/motion/debug", HTTP_GET, motion_debug_get);
+    reg(s_api, "/api/ai", HTTP_GET, ai_get);
+    reg(s_api, "/api/ai", HTTP_POST, ai_post);
+    reg(s_api, "/api/ai/test", HTTP_POST, ai_test_post);
     reg(s_api, "/api/events", HTTP_GET, events_get);
     reg(s_api, "/api/events/clear", HTTP_POST, events_clear_post);
     reg(s_api, "/api/events/snapshot", HTTP_GET, event_snapshot_get);

@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
+#include "ai_mgr.h"
 #include "event_mgr.h"
 #include "motion_mgr.h"
 #include "mqtt_mgr.h"
@@ -37,6 +38,7 @@ void app_main(void)
     wifi_mgr_init();
     mqtt_mgr_init();
     motion_mgr_init();
+    ai_mgr_init();
     web_server_start();
     console_cmds_start();
 

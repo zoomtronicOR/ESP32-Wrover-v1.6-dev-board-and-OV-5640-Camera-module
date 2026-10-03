@@ -50,6 +50,8 @@ Wi-Fi se može podesiti i preko serijske konzole: `wifi <ssid> <lozinka>`.
 | POST | `/api/mqtt/discovery` | Ponovo šalje HA discovery |
 | GET/POST | `/api/motion` | Podešavanja i stanje detekcije pokreta, zone |
 | GET | `/api/motion/debug` | Mreža razlika (heatmap) za podešavanje osetljivosti |
+| GET/POST | `/api/ai` | Podešavanja i stanje eksternog AI-ja |
+| POST | `/api/ai/test` | Jedna inferencija odmah (objekti + analizirani frame) |
 | GET | `/api/events` | Dnevnik događaja (`?limit=N`) |
 | GET | `/api/events/snapshot?id=N` | Snapshot događaja |
 | POST | `/api/events/clear` | Briše događaje |
@@ -70,6 +72,8 @@ Podešava se na tabu **MQTT / HA**. Topici imaju oblik `camera/<device>/…`, gd
 | `command` | `snapshot`, `reboot`, `restart_camera` |
 | `motion`, `motion/zoneN` | `ON` / `OFF` (retained) |
 | `motion/set` | `ON` / `OFF`: uključuje ili isključuje detekciju pokreta |
+| `person`, `car`, … | JSON po praćenoj klasi: `{"detected":true,"confidence":0.92,"x","y","width","height","zone","timestamp"}` (retained) |
+| `ai/set` | `ON` / `OFF`: uključuje ili isključuje AI; komande `ai_on` / `ai_off` na `command` |
 | `camera/set` | JSON podešavanja kamere, npr. `{"vflip":1,"quality":10}` |
 
 Kad je discovery uključen, HA automatski dobija uređaj sa kamerom (snapshot), dijagnostičkim senzorima i dugmadima. Ponovo ga šalje kad se HA restartuje (`homeassistant/status`).
@@ -84,6 +88,15 @@ Tab **Motion**: zone se crtaju prevlačenjem preko slike. Heatmap prikazuje šta
 
 Nagla promena većine slike, npr. kad se upali svetlo, ne pokreće alarm. Dok je detekcija uključena, senzor ne ide u standby.
 
+## AI detekcija objekata
+
+Klasični ESP32 je preslab za ozbiljnu lokalnu detekciju objekata (spec §42). Zato kamera šalje frame-ove na AI server u mreži, a server vraća detektovane objekte.
+- **Režimi:** samo dok traje pokret (podrazumevano) ili stalno, na zadati interval.
+- **Podržani serveri:**
+  - priloženi `tools/ai_server` (YOLO): `pip install -r tools/ai_server/requirements.txt`, zatim `python tools/ai_server/server.py`, a u kameri URL `http://<host>:5005/detect`;
+  - CodeProject.AI / DeepStack: URL `http://<host>:32168/v1/vision/detection`, API „DeepStack“.
+- **Praćenje:** objekat se prijavljuje kao `object_detected` tek kad je viđen iznad *enter* praga tokom *persistence* vremena. Ostaje prisutan dok je iznad *keep* praga, a `object_left` stiže posle *left after* vremena bez detekcije (spec §60).
+
 ## Status razvoja
 
 - [x] **Faza 1, kamera:** OV5640 init, PSRAM, JPEG, snapshot, MJPEG stream, watchdog kamere (restart drajvera)
@@ -92,6 +105,6 @@ Nagla promena većine slike, npr. kad se upali svetlo, ne pokreće alarm. Dok je
 - [x] **Faza 4, detekcija pokreta:** razlika frame-ova sa kompenzacijom osvetljenja, do 4 zone, event engine sa snapshot-ima, HA binary senzori
 - [ ] Faza 5: lokalni AI (ESP-DL)
 - [ ] Faza 6: microSD, timelapse, pregled događaja
-- [ ] Faza 7: eksterni AI / Frigate
+- [x] **Faza 7, eksterni AI:** HTTP AI server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom, HA senzori po klasi, okviri na Live View-u
 - [ ] Faza 8: sigurnost (auth, API tokeni, zaštita OTA, TLS)
 

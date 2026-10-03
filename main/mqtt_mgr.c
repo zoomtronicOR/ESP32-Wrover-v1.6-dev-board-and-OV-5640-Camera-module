@@ -1,6 +1,8 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 #include "mqtt_mgr.h"
+#include "ai_mgr.h"
 #include "app_config.h"
 #include "camera_mgr.h"
 #include "esp_app_desc.h"
@@ -53,6 +55,7 @@ typedef enum {
     CMD_STATE,       // data = "leaf\0payload", retain in flag
     CMD_FRAME,       // frame = referenced camera frame
     CMD_MOTION_SET,  // data = "ON"/"OFF"
+    CMD_AI_SET,      // data = "ON"/"OFF"
 } cmd_type_t;
 
 typedef struct {
@@ -338,6 +341,36 @@ static void publish_discovery(void)
         announce("binary_sensor", object, z);
     }
 
+    // External AI (spec §15): switch, last object and one binary sensor per tracked label.
+    cJSON *aisw = entity("ai_detection", "AI detection", "config");
+    topic(t, "ai/set");
+    cJSON_AddStringToObject(aisw, "command_topic", t);
+    topic(t, "telemetry");
+    cJSON_AddStringToObject(aisw, "state_topic", t);
+    cJSON_AddStringToObject(aisw, "value_template", "{{ 'ON' if value_json.ai_enabled else 'OFF' }}");
+    cJSON_AddStringToObject(aisw, "icon", "mdi:robot");
+    announce("switch", "ai_detection", aisw);
+    add_sensor("last_object", "Last detected object", "{{ value_json.last_object }}", NULL, NULL, false);
+
+    for (int i = 0; i < AI_MAX_LABELS; i++) {
+        char object[16], label[16], name[24], tt[TOPIC_LEN];
+        snprintf(object, sizeof(object), "object_%d", i + 1);
+        if (!ai_mgr_label(i, label, sizeof(label))) {
+            snprintf(tt, sizeof(tt), "%s/binary_sensor/%s/%s/config", s_cfg.disc_prefix, s_dev, object);
+            esp_mqtt_client_publish(s_client, tt, "", 0, 1, true);
+            continue;
+        }
+        strlcpy(name, label, sizeof(name));
+        name[0] = toupper((unsigned char)name[0]);
+        cJSON *b = entity(object, name, NULL);
+        topic(t, label);
+        cJSON_AddStringToObject(b, "state_topic", t);
+        cJSON_AddStringToObject(b, "value_template", "{{ 'ON' if value_json.detected else 'OFF' }}");
+        cJSON_AddStringToObject(b, "device_class", "occupancy");
+        cJSON_AddStringToObject(b, "json_attributes_topic", t);
+        announce("binary_sensor", object, b);
+    }
+
     s_discovery_sent = true;
     ESP_LOGI(TAG, "Home Assistant discovery published (%s/+/%s/...)", s_cfg.disc_prefix, s_dev);
 }
@@ -371,6 +404,9 @@ static void publish_telemetry(void)
     cJSON_AddBoolToObject(o, "motion_enabled", cJSON_IsTrue(cJSON_GetObjectItem(ms, "enabled")));
     cJSON_Delete(ms);
     cJSON_AddNumberToObject(o, "motion_events_today", event_count_today(EV_MOTION_START));
+    cJSON_AddBoolToObject(o, "ai_enabled", strcmp(ai_mgr_state(), "off") != 0);
+    cJSON_AddStringToObject(o, "ai_state", ai_mgr_state());
+    cJSON_AddStringToObject(o, "last_object", ai_mgr_last_object()[0] ? ai_mgr_last_object() : "none");
     char url[48];
     snprintf(url, sizeof(url), "http://%s:81/stream", w.ip);
     cJSON_AddStringToObject(o, "stream_url", url);
@@ -450,7 +486,8 @@ static void handle_message(esp_mqtt_event_handle_t ev)
         return;
     }
 
-    char cmd_t[TOPIC_LEN], set_t[TOPIC_LEN], ha_t[TOPIC_LEN], mot_t[TOPIC_LEN];
+    char cmd_t[TOPIC_LEN], set_t[TOPIC_LEN], ha_t[TOPIC_LEN], mot_t[TOPIC_LEN], ai_t[TOPIC_LEN];
+    topic(ai_t, "ai/set");
     topic(cmd_t, "command");
     topic(set_t, "camera/set");
     topic(mot_t, "motion/set");
@@ -460,6 +497,9 @@ static void handle_message(esp_mqtt_event_handle_t ev)
         if (strcmp(data, "online") == 0 && s_cfg.discovery) {
             post(CMD_DISCOVERY, NULL);  // HA restarted: re-announce entities
         }
+    } else if (strcmp(t, ai_t) == 0) {
+        post(CMD_AI_SET, data);
+        return;
     } else if (strcmp(t, mot_t) == 0) {
         post(CMD_MOTION_SET, data);
         return;
@@ -474,6 +514,8 @@ static void handle_message(esp_mqtt_event_handle_t ev)
             post(CMD_REBOOT, NULL);
         } else if (strcmp(data, "restart_camera") == 0) {
             post(CMD_RESTART_CAMERA, NULL);
+        } else if (strcmp(data, "ai_on") == 0 || strcmp(data, "ai_off") == 0) {
+            post(CMD_AI_SET, strdup(data[3] == 'n' ? "ON" : "OFF"));
         } else {
             ESP_LOGW(TAG, "unknown command '%s'", data);
         }
@@ -583,6 +625,8 @@ static void on_connected(void)
     esp_mqtt_client_subscribe(s_client, t, 1);
     topic(t, "motion/set");
     esp_mqtt_client_subscribe(s_client, t, 1);
+    topic(t, "ai/set");
+    esp_mqtt_client_subscribe(s_client, t, 1);
     topic(t, "motion");
     esp_mqtt_client_publish(s_client, t, motion_mgr_active() ? "ON" : "OFF", 0, s_cfg.qos, true);
     if (s_cfg.discovery) {
@@ -645,6 +689,11 @@ static void worker_task(void *arg)
                 publish_telemetry();
                 break;
             }
+            case CMD_AI_SET:
+                ai_mgr_set_enabled(strcmp(c.data, "ON") == 0);
+                vTaskDelay(pdMS_TO_TICKS(600));  // let the AI task leave the "off" state
+                publish_telemetry();
+                break;
             case CMD_RESTART_CLIENT:
                 s_start_pending = true;
                 break;

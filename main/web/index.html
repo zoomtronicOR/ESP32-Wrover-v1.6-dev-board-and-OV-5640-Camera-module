@@ -51,6 +51,9 @@ td,th{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
 th{color:var(--muted);font-weight:500}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
+.obox{position:absolute;border:2px solid #22c55e;color:#fff;font:11px ui-monospace,monospace;pointer-events:none}
+.obox span{position:absolute;left:-2px;top:-17px;background:#22c55e;padding:1px 4px;white-space:nowrap}
+.aitest{position:relative;display:inline-block;max-width:100%}.aitest img{display:block;max-width:100%;border-radius:6px}
 .zone{position:absolute;border:2px solid rgba(255,214,0,.85);color:#ffd600;font:11px ui-monospace,monospace;padding:1px 3px;pointer-events:none;text-shadow:0 0 3px #000}
 .zone.on{border-color:#ff3b30;background:rgba(255,59,48,.18);color:#fff}
 .zedit{position:relative;display:inline-block;max-width:100%;touch-action:none;user-select:none}
@@ -79,6 +82,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   <button data-tab="live">Live View</button>
   <button data-tab="camera">Camera</button>
   <button data-tab="motion">Motion</button>
+  <button data-tab="ai">AI</button>
   <button data-tab="events">Events</button>
   <button data-tab="mqtt">MQTT / HA</button>
   <button data-tab="network">Network</button>
@@ -96,7 +100,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 
 <section id="live">
   <div class="card">
-    <div class="viewer" id="liveview"><img id="liveimg" alt=""><div id="livezones"></div><span class="msg" id="livemsg">connecting…</span>
+    <div class="viewer" id="liveview"><img id="liveimg" alt=""><div id="livezones"></div><div id="liveboxes"></div><span class="msg" id="livemsg">connecting…</span>
       <div class="ovl" id="ovl"><span id="ovl-l"></span><span id="ovl-r"></span></div></div>
     <div class="toolbar">
       <a class="b" id="snapbtn" href="/capture" download>Snapshot</a>
@@ -153,6 +157,35 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
       </form>
       <p class="muted">While enabled the sensor never enters standby (it needs a continuous frame flow), so it runs warmer.</p>
       <h2 style="margin-top:14px">Live</h2><table id="motstate"></table>
+    </div>
+  </div>
+</section>
+
+<section id="ai">
+  <div class="cols">
+    <div class="card"><h2>External AI server</h2>
+      <form class="f" id="aiform" autocomplete="off">
+        <label>Enabled</label><div><input type="checkbox" id="ai_enabled" class="switch"></div>
+        <label>Server URL</label><input type="text" id="ai_url" maxlength="127" placeholder="http://192.168.1.10:5005/detect">
+        <label>API</label><select id="ai_api"><option value="0">Generic (raw JPEG, spec §44)</option><option value="1">DeepStack / CodeProject.AI</option></select>
+        <label>API token</label><input type="password" id="ai_token" maxlength="95" placeholder="none">
+        <label>Run</label><select id="ai_mode"><option value="1">Only while motion is detected</option><option value="0">Continuously</option></select>
+        <label>Interval (ms)</label><input type="number" id="ai_interval_ms" min="200" max="60000">
+        <label>Timeout (ms)</label><input type="number" id="ai_timeout_ms" min="500" max="30000">
+        <label>Objects to track</label><input type="text" id="ai_labels" maxlength="95" placeholder="person,car,dog,cat">
+        <label>Enter confidence %</label><input type="number" id="ai_enter_conf" min="1" max="100">
+        <label>Keep confidence %</label><input type="number" id="ai_keep_conf" min="1" max="100">
+        <label>Persistence (ms)</label><input type="number" id="ai_persist_ms" min="0" max="60000">
+        <label>Left after (ms)</label><input type="number" id="ai_absent_ms" min="0" max="60000">
+        <label>Event snapshot</label><div><input type="checkbox" id="ai_snapshot" class="switch"></div>
+        <label>Snapshot to MQTT</label><div><input type="checkbox" id="ai_mqtt_snapshot" class="switch"></div>
+        <span></span><div class="toolbar" style="margin:0"><button class="b" type="submit">Save</button><button class="b sec" type="button" id="aitestbtn">Test now</button></div>
+      </form>
+      <p class="muted">Labels are matched by name (COCO: person, car, truck, bicycle, motorcycle, bus, dog, cat, bird…). An object raises <code>object_detected</code> after it is seen above the enter confidence for the persistence time, and <code>object_left</code> when it has been absent for the "left after" time.</p>
+    </div>
+    <div class="card"><h2>Status</h2><table id="aistate"></table>
+      <h2 style="margin-top:14px">Test result <span class="muted" id="aitestinfo" style="font-weight:400"></span></h2>
+      <div class="aitest" id="aitest"></div>
     </div>
   </div>
 </section>
@@ -275,6 +308,7 @@ function showTab(id) {
   clearInterval(heatTimer);
   if (id === 'motion') loadMotion();
   if (id === 'events') loadEvents();
+  if (id === 'ai') loadAi();
   clearInterval(telTimer);
   if (id === 'system') { loadSystem(); loadTelemetry(); telTimer = setInterval(loadTelemetry, 2000); }
   try { localStorage.setItem('tab', id); } catch (e) {}
@@ -297,7 +331,7 @@ function renderStatus(s) {
     pill('PSRAM', s.psram_total ? (psramPct < 0.2 ? 'warn' : 'ok') : 'bad', fmtBytes(s.psram_free) + ' free') +
     pill('MQTT', s.modules.mqtt === 'connecting' ? 'warn' : mod(s.modules.mqtt), s.modules.mqtt) + pill('HA', s.modules.ha === 'connecting' ? 'warn' : mod(s.modules.ha), s.modules.ha) +
     pill('Motion', s.motion && s.motion.enabled ? (s.motion.active ? 'bad' : 'ok') : '', s.motion && s.motion.active ? 'motion!' : 'idle') +
-    pill('SD', mod(s.modules.sd), 'Phase 6') + pill('AI', mod(s.modules.ai), 'Phase 5');
+    pill('SD', mod(s.modules.sd), 'Phase 6') + pill('AI', { ok: 'ok', idle: 'ok', error: 'bad' }[s.modules.ai] || '', 'AI ' + s.modules.ai);
   const c = s.camera;
   const m = [
     ['Sensor', c.ok ? (c.standby ? 'standby' : 'active') : 'error'], ['Camera FPS', c.fps.toFixed(1)], ['Resolution', c.width ? c.width + '×' + c.height : '—'], ['JPEG quality', c.quality],
@@ -314,11 +348,12 @@ function renderStatus(s) {
   if (document.querySelector('#mqtt.active')) renderMqtt();
   renderLiveZones();
   if (document.querySelector('#motion.active')) { renderMotState(); drawZones(); }
+  if (document.querySelector('#ai.active')) renderAiState();
 }
 function connectWS() {
   let ws;
   try { ws = new WebSocket(`ws://${location.host || host}/ws`); } catch (e) { return pollStatus(); }
-  ws.onmessage = e => { try { const j = JSON.parse(e.data); if (j.type === 'status') renderStatus(j); else if (j.type === 'event') onEvent(j); } catch (x) {} };
+  ws.onmessage = e => { try { const j = JSON.parse(e.data); if (j.type === 'status') renderStatus(j); else if (j.type === 'event') onEvent(j); else if (j.type === 'detection') onDetection(j); } catch (x) {} };
   ws.onclose = () => setTimeout(connectWS, 3000);
 }
 async function pollStatus() { try { renderStatus(await api('/api/status')); } catch (e) {} }
@@ -505,18 +540,73 @@ function renderEvents() {
   $('evcount').textContent = `${list.length} event(s)`;
   $('evlist').innerHTML = list.length ? list.map(e => `<div class="ev">${e.snapshot ? `<a href="${e.snapshot}" target="_blank"><img loading="lazy" src="${e.snapshot}" alt=""></a>` : '<div class="noimg">no image</div>'}
     <div><span class="badge ${e.event}">${esc(e.event)}</span>${e.zone ? `<b>${esc(e.zone)}</b> ` : ''}<span class="muted">${esc(e.time || 'uptime ' + e.uptime + ' s')}</span>
-    <div class="muted">${e.event.startsWith('motion') ? 'area ' + e.value + '%' : ''} ${esc(e.detail || '')}</div></div></div>`).join('') : '<p class="muted">No events yet.</p>';
+    <div class="muted">${e.event.startsWith('motion') ? 'area ' + e.value + '%' : e.event.startsWith('object') ? 'confidence ' + e.value + '%' : ''} ${esc(e.detail || '')}</div></div></div>`).join('') : '<p class="muted">No events yet.</p>';
 }
 function onEvent(e) {
   delete e.type;
   events.unshift(e); events = events.slice(0, 64);
   if (document.querySelector('#events.active')) renderEvents();
   if (e.event === 'motion_start') toast(`Motion: ${e.zone || ''}`);
+  if (e.event === 'object_detected') toast(`Detected: ${e.object}${e.zone ? ' in ' + e.zone : ''}`);
 }
 $('evfilter').onchange = renderEvents;
 $('evrefresh').onclick = loadEvents;
 $('evclear').onclick = async () => { if (!confirm('Delete all events and their snapshots?')) return; try { await api('/api/events/clear', {}); events = []; renderEvents(); } catch (e) { toast(e.message); } };
 window.addEventListener('resize', () => { renderLiveZones(); drawZones(); });
+
+/* ---------- AI ---------- */
+const AI_NUM = ['api', 'mode', 'interval_ms', 'timeout_ms', 'enter_conf', 'keep_conf', 'persist_ms', 'absent_ms'];
+const AI_BOOL = ['enabled', 'snapshot', 'mqtt_snapshot'];
+let boxTimer = null;
+async function loadAi() {
+  try {
+    const a = await api('/api/ai'), c = a.config;
+    for (const k of AI_NUM) $('ai_' + k).value = c[k];
+    for (const k of AI_BOOL) $('ai_' + k).checked = c[k];
+    $('ai_url').value = c.url; $('ai_labels').value = c.labels;
+    $('ai_token').placeholder = c.has_token ? 'unchanged' : 'none';
+    renderAiState();
+  } catch (e) { toast(e.message); }
+}
+$('aiform').onsubmit = async e => {
+  e.preventDefault();
+  const body = { url: $('ai_url').value.trim(), labels: $('ai_labels').value.trim() };
+  for (const k of AI_NUM) body[k] = Number($('ai_' + k).value);
+  for (const k of AI_BOOL) body[k] = $('ai_' + k).checked;
+  if ($('ai_token').value) body.token = $('ai_token').value;
+  try { await api('/api/ai', body); $('ai_token').value = ''; toast('AI settings saved'); } catch (x) { toast(x.message); }
+};
+function renderAiState() {
+  const a = status && status.ai; if (!a) return;
+  const rows = [['State', a.state], ['Inferences', a.inferences], ['Latency', a.latency_ms ? a.latency_ms + ' ms' : '—'], ['AI FPS', a.fps],
+    ['Errors', a.errors], ['Last error', a.last_error || '—'], ['Last object', a.last_object || '—']]
+    .concat(a.objects.map(o => [o.label, `${o.present ? 'PRESENT ×' + o.count + ' (' + o.confidence + '%)' : 'not present'} · today ${o.today}`]));
+  $('aistate').innerHTML = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
+}
+function boxesHtml(objs, fw, fh, dispW, dispH, ox = 0, oy = 0) {
+  const sx = dispW / fw, sy = dispH / fh;
+  return objs.map(o => { const [x1, y1, x2, y2] = o.bbox;
+    return `<div class="obox" style="left:${ox + x1 * sx}px;top:${oy + y1 * sy}px;width:${(x2 - x1) * sx}px;height:${(y2 - y1) * sy}px"><span>${esc(o.label)} ${Math.round(o.confidence * 100)}%</span></div>`; }).join('');
+}
+$('aitestbtn').onclick = async () => {
+  $('aitestinfo').textContent = 'running…'; $('aitest').innerHTML = '';
+  try {
+    const r = await api('/api/ai/test', {});
+    if (r.error) { $('aitestinfo').textContent = r.error; return; }
+    $('aitestinfo').textContent = `${r.objects.length} object(s), ${r.ms} ms`;
+    $('aitest').innerHTML = `<img id="aitestimg" src="data:image/jpeg;base64,${r.image}" alt="">`;
+    $('aitestimg').onload = () => { const im = $('aitestimg'); $('aitest').insertAdjacentHTML('beforeend', boxesHtml(r.objects, r.w, r.h, im.clientWidth, im.clientHeight)); };
+  } catch (e) { $('aitestinfo').textContent = e.message; }
+};
+// Bounding boxes over the live stream (spec §6), cleared when detections stop arriving.
+function onDetection(d) {
+  const box = $('liveboxes'), img = $('liveimg'), v = $('liveview');
+  if (!box || !img.naturalWidth || !document.querySelector('#live.active')) return;
+  const vw = v.clientWidth, vh = v.clientHeight, r = Math.min(vw / img.naturalWidth, vh / img.naturalHeight);
+  const iw = img.naturalWidth * r, ih = img.naturalHeight * r;
+  box.innerHTML = boxesHtml(d.objects, d.w, d.h, iw, ih, (vw - iw) / 2, (vh - ih) / 2);
+  clearTimeout(boxTimer); boxTimer = setTimeout(() => box.innerHTML = '', 3000);
+}
 
 /* ---------- MQTT / HA ---------- */
 const MQ_FIELDS = ['host', 'port', 'user', 'client_id', 'base', 'qos', 'keepalive', 'telemetry_s', 'snapshot_s', 'disc_prefix'];

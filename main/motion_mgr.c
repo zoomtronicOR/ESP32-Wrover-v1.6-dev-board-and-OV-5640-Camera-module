@@ -604,6 +604,21 @@ cJSON *motion_mgr_debug_json(void)
     return o;
 }
 
+bool motion_mgr_zone_at(int x, int y, char *name, size_t len)
+{
+    bool found = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_cfg.nzones && !found; i++) {
+        const zone_t *z = &s_cfg.zones[i];
+        if (x >= z->x && x < z->x + z->w && y >= z->y && y < z->y + z->h) {
+            strlcpy(name, z->name, len);
+            found = true;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return found;
+}
+
 bool motion_mgr_zone(int i, char *name, size_t len)
 {
     bool used = false;

@@ -20,6 +20,8 @@ typedef enum {
     EV_MQTT_CONNECTED,
     EV_MQTT_DISCONNECTED,
     EV_LOW_MEMORY,
+    EV_OBJECT_DETECTED,  // detail = label
+    EV_OBJECT_LEFT,      // detail = label
     EV_TYPE_COUNT
 } event_type_t;
 

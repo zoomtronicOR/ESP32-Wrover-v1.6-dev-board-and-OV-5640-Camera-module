@@ -23,3 +23,5 @@ cJSON *motion_mgr_debug_json(void);
 
 // Zone info for Home Assistant discovery. Returns false when slot i is unused.
 bool motion_mgr_zone(int i, char *name, size_t len);
+// Name of the first configured zone containing point (x, y) in 0..1000 frame units.
+bool motion_mgr_zone_at(int x, int y, char *name, size_t len);

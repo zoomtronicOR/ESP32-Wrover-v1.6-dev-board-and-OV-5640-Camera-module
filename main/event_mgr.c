@@ -52,6 +52,8 @@ static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
     [EV_MQTT_CONNECTED] = "mqtt_connected",
     [EV_MQTT_DISCONNECTED] = "mqtt_disconnected",
     [EV_LOW_MEMORY] = "low_memory",
+    [EV_OBJECT_DETECTED] = "object_detected",
+    [EV_OBJECT_LEFT] = "object_left",
 };
 
 static QueueHandle_t s_queue;
@@ -95,6 +97,9 @@ static cJSON *record_json(const record_t *r)
     }
     if (r->detail[0]) {
         cJSON_AddStringToObject(o, "detail", r->detail);
+    }
+    if (r->type == EV_OBJECT_DETECTED || r->type == EV_OBJECT_LEFT) {
+        cJSON_AddStringToObject(o, "object", r->detail);  // spec §16 payload
     }
     cJSON_AddNumberToObject(o, "value", (int)(r->value * 10) / 10.0);
     if (time_valid(r->epoch)) {
