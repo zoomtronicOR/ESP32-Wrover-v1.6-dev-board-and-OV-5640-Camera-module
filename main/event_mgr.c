@@ -55,6 +55,10 @@ static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
     [EV_LOW_MEMORY] = "low_memory",
     [EV_OBJECT_DETECTED] = "object_detected",
     [EV_OBJECT_LEFT] = "object_left",
+    [EV_LINE_IN] = "line_in",
+    [EV_LINE_OUT] = "line_out",
+    [EV_PERSON_LOCAL] = "person_detected_local",
+    [EV_PERSON_LOCAL_LEFT] = "person_left_local",
     [EV_OTA_STARTED] = "ota_started",
     [EV_OTA_FINISHED] = "ota_finished",
 };

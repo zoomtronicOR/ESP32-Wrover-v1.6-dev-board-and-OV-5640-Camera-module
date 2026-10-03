@@ -1,4 +1,5 @@
 #include <math.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include "motion_mgr.h"
@@ -24,11 +25,20 @@ static const char *TAG = "motion";
 #define SCENE_CHANGE_PCT  60.0f  // more changed cells than this = lights/AEC jump: rebase, no alarm
 #define BG_SHIFT_IDLE     3      // background adapts with 1/8 per frame while quiet
 #define BG_SHIFT_ACTIVE   5      // and 1/32 while motion is active, so objects are not absorbed fast
+#define MIN_BLOB_CELLS    6      // changed cells needed for a blob (line crossing / person crop)
+#define LINE_MARGIN       25.0f  // hysteresis band around the line (0..1000 units)
+#define LINE_RESET_US     (3 * 1000000LL)  // blob lost this long: forget which side it was on
 
 typedef struct {
     char name[24];
     int16_t x, y, w, h;  // 0..1000 of the frame
 } zone_t;
+
+typedef struct {
+    bool enabled;
+    int16_t x1, y1, x2, y2;  // 0..1000 of the frame, A -> B
+    bool invert;             // swap IN / OUT
+} line_cfg_t;
 
 typedef struct {
     bool enabled;
@@ -41,6 +51,7 @@ typedef struct {
     bool mqtt_snapshot;      // also publish it to <base>/snapshot
     int nzones;
     zone_t zones[MOTION_MAX_ZONES];
+    line_cfg_t line;
 } motion_cfg_t;
 
 typedef struct {
@@ -70,6 +81,12 @@ static int s_gw, s_gh;
 static bool s_bg_valid;
 
 static float s_global_pct;
+static int s_blob[4];           // x, y, w, h of the changed area (0..1000)
+static int64_t s_blob_us;       // when s_blob was last valid
+static int s_line_side;         // -1 / +1 side of the line the blob is on, 0 = unknown
+static uint32_t s_line_in, s_line_out;
+static int s_line_yday = -1;
+static bool s_line_last_in;
 static uint32_t s_analysed, s_scene_changes;
 static float s_analyse_ms;
 
@@ -127,6 +144,24 @@ static bool parse_config(const cJSON *j, motion_cfg_t *c, char *err, size_t err_
         !get_int(j, "snapshot", 0, 1, &snap, err, err_len) || !get_int(j, "mqtt_snapshot", 0, 1, &msnap, err, err_len)) {
         return false;
     }
+    const cJSON *line = cJSON_GetObjectItemCaseSensitive(j, "line");
+    if (line) {
+        line_cfg_t l = {0};
+        if (cJSON_IsObject(line)) {
+            int x1 = 0, y1 = 0, x2 = 0, y2 = 0, inv = 0;
+            if (!get_int(line, "x1", 0, 1000, &x1, err, err_len) || !get_int(line, "y1", 0, 1000, &y1, err, err_len) ||
+                !get_int(line, "x2", 0, 1000, &x2, err, err_len) || !get_int(line, "y2", 0, 1000, &y2, err, err_len) ||
+                !get_int(line, "invert", 0, 1, &inv, err, err_len)) {
+                return false;
+            }
+            if ((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) < 50 * 50) {
+                snprintf(err, err_len, "line is too short");
+                return false;
+            }
+            l = (line_cfg_t){.enabled = true, .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2, .invert = inv};
+        }
+        c->line = l;  // null removes the line
+    }
     const cJSON *zones = cJSON_GetObjectItemCaseSensitive(j, "zones");
     if (zones) {
         if (!cJSON_IsArray(zones) || cJSON_GetArraySize(zones) > MOTION_MAX_ZONES) {
@@ -183,6 +218,16 @@ static cJSON *config_json(const motion_cfg_t *c)
     cJSON_AddNumberToObject(o, "cooldown_s", c->cooldown_s);
     cJSON_AddBoolToObject(o, "snapshot", c->snapshot);
     cJSON_AddBoolToObject(o, "mqtt_snapshot", c->mqtt_snapshot);
+    if (c->line.enabled) {
+        cJSON *l = cJSON_AddObjectToObject(o, "line");
+        cJSON_AddNumberToObject(l, "x1", c->line.x1);
+        cJSON_AddNumberToObject(l, "y1", c->line.y1);
+        cJSON_AddNumberToObject(l, "x2", c->line.x2);
+        cJSON_AddNumberToObject(l, "y2", c->line.y2);
+        cJSON_AddBoolToObject(l, "invert", c->line.invert);
+    } else {
+        cJSON_AddNullToObject(o, "line");
+    }
     cJSON *zones = cJSON_AddArrayToObject(o, "zones");
     for (int i = 0; i < c->nzones; i++) {
         cJSON *z = cJSON_CreateObject();
@@ -239,6 +284,48 @@ static esp_err_t save_config(const motion_cfg_t *c)
     }
     cJSON_free(txt);
     return err;
+}
+
+/* ------------------------------------------------------------------ line crossing --------- */
+
+// Updates the side of the line the moving blob is on; a side change is a crossing.
+// IN means moving towards the positive side (normal (-dy, dx) of A->B), unless inverted.
+static void line_update(const motion_cfg_t *c, int cx, int cy, int64_t now)
+{
+    const line_cfg_t *l = &c->line;
+    if (!l->enabled) {
+        return;
+    }
+    float dx = l->x2 - l->x1, dy = l->y2 - l->y1;
+    float len2 = dx * dx + dy * dy;
+    if (len2 < 100) {
+        return;
+    }
+    float px = cx - l->x1, py = cy - l->y1;
+    float t = (px * dx + py * dy) / len2;               // position along the segment
+    float dist = (dx * py - dy * px) / sqrtf(len2);     // signed distance in 0..1000 units
+    if (t < -0.15f || t > 1.15f || fabsf(dist) < LINE_MARGIN) {
+        return;  // beside the segment or inside the hysteresis band
+    }
+    int side = dist > 0 ? 1 : -1;
+    if (s_line_side != 0 && side != s_line_side) {
+        time_t tnow = time(NULL);
+        struct tm tm;
+        localtime_r(&tnow, &tm);
+        if (tm.tm_yday != s_line_yday) {
+            s_line_yday = tm.tm_yday;
+            s_line_in = s_line_out = 0;
+        }
+        bool in = (s_line_side < 0) != l->invert;
+        uint32_t count = in ? ++s_line_in : ++s_line_out;
+        event_post(in ? EV_LINE_IN : EV_LINE_OUT, NULL, count, NULL, NULL);
+        char js[64];
+        snprintf(js, sizeof(js), "{\"in\":%lu,\"out\":%lu,\"last\":\"%s\"}", (unsigned long)s_line_in,
+                 (unsigned long)s_line_out, in ? "in" : "out");
+        mqtt_mgr_publish_state("line", js, true);
+        s_line_last_in = in;
+    }
+    s_line_side = side;
 }
 
 /* ------------------------------------------------------------------ analysis -------------- */
@@ -354,6 +441,8 @@ static void analyse(cam_frame_t *f, const motion_cfg_t *c)
     zone_t zones[MOTION_MAX_ZONES];
     int nz = effective_zones(c, zones);
     int changed_total = 0;
+    int bx0 = s_gw, by0 = s_gh, bx1 = -1, by1 = -1, nblob = 0;
+    long sx = 0, sy = 0;
     int zone_hits[MOTION_MAX_ZONES] = {0}, zone_cells[MOTION_MAX_ZONES] = {0};
     int zx0[MOTION_MAX_ZONES], zx1[MOTION_MAX_ZONES], zy0[MOTION_MAX_ZONES], zy1[MOTION_MAX_ZONES];
     for (int z = 0; z < nz; z++) {
@@ -370,6 +459,15 @@ static void analyse(cam_frame_t *f, const motion_cfg_t *c)
             int q = d * 9 / (thr * 2);
             s_diffq[i] = q > 9 ? 9 : q;
             changed_total += hit;
+            if (hit) {
+                sx += x;
+                sy += y;
+                nblob++;
+                bx0 = x < bx0 ? x : bx0;
+                bx1 = x > bx1 ? x : bx1;
+                by0 = y < by0 ? y : by0;
+                by1 = y > by1 ? y : by1;
+            }
             for (int z = 0; z < nz; z++) {
                 if (x >= zx0[z] && x < zx1[z] && y >= zy0[z] && y < zy1[z]) {
                     zone_cells[z]++;
@@ -396,6 +494,19 @@ static void analyse(cam_frame_t *f, const motion_cfg_t *c)
     }
 
     int64_t now = esp_timer_get_time();
+    if (!scene_change && nblob >= MIN_BLOB_CELLS) {
+        s_blob[0] = bx0 * 1000 / s_gw;
+        s_blob[1] = by0 * 1000 / s_gh;
+        s_blob[2] = (bx1 + 1 - bx0) * 1000 / s_gw;
+        s_blob[3] = (by1 + 1 - by0) * 1000 / s_gh;
+        s_blob_us = now;
+        // Centroid in 0..1000 units (cell centres).
+        int cx = (int)((sx * 1000 + nblob * 500) / ((long)nblob * s_gw));
+        int cy = (int)((sy * 1000 + nblob * 500) / ((long)nblob * s_gh));
+        line_update(c, cx, cy, now);
+    } else if (now - s_blob_us > LINE_RESET_US) {
+        s_line_side = 0;
+    }
     bool changed_state = false;
     for (int z = 0; z < nz; z++) {
         zone_state_t *st = &s_zs[z];
@@ -544,6 +655,11 @@ cJSON *motion_mgr_state_json(void)
     cJSON_AddNumberToObject(o, "scene_changes", s_scene_changes);
     cJSON_AddNumberToObject(o, "analyse_ms", (int)s_analyse_ms);
     cJSON_AddNumberToObject(o, "events_today", event_count_today(EV_MOTION_START));
+    cJSON *ls = cJSON_AddObjectToObject(o, "line");
+    cJSON_AddBoolToObject(ls, "enabled", s_cfg.line.enabled);
+    cJSON_AddNumberToObject(ls, "in", s_line_in);
+    cJSON_AddNumberToObject(ls, "out", s_line_out);
+    cJSON_AddStringToObject(ls, "last", s_line_in + s_line_out ? (s_line_last_in ? "in" : "out") : "");
     zone_t zones[MOTION_MAX_ZONES];
     int nz = effective_zones(&s_cfg, zones);
     cJSON *arr = cJSON_AddArrayToObject(o, "zones");
@@ -602,6 +718,27 @@ cJSON *motion_mgr_debug_json(void)
     }
     xSemaphoreGive(s_lock);
     return o;
+}
+
+bool motion_mgr_blob(int *x, int *y, int *w, int *h, int64_t max_age_us)
+{
+    bool ok = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_blob_us && esp_timer_get_time() - s_blob_us <= max_age_us) {
+        *x = s_blob[0];
+        *y = s_blob[1];
+        *w = s_blob[2];
+        *h = s_blob[3];
+        ok = true;
+    }
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
+void motion_mgr_line_counts(uint32_t *in, uint32_t *out)
+{
+    *in = s_line_in;
+    *out = s_line_out;
 }
 
 bool motion_mgr_zone_at(int x, int y, char *name, size_t len)

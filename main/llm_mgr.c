@@ -381,7 +381,8 @@ static void on_event(uint32_t id, event_type_t type, bool has_snapshot)
     if (!c.enabled || !has_snapshot) {
         return;
     }
-    if (!((type == EV_MOTION_START && c.on_motion) || (type == EV_OBJECT_DETECTED && c.on_object))) {
+    if (!((type == EV_MOTION_START && c.on_motion) ||
+          ((type == EV_OBJECT_DETECTED || type == EV_PERSON_LOCAL) && c.on_object))) {
         return;
     }
     job_t j = {.event_id = id};

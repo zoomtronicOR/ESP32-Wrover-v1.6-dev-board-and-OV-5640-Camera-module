@@ -14,6 +14,7 @@
 #include "freertos/task.h"
 #include "event_mgr.h"
 #include "motion_mgr.h"
+#include "person_mgr.h"
 #include "mqtt_client.h"
 #include "nvs.h"
 #include "sysmon.h"
@@ -56,6 +57,7 @@ typedef enum {
     CMD_FRAME,       // frame = referenced camera frame
     CMD_MOTION_SET,  // data = "ON"/"OFF"
     CMD_AI_SET,      // data = "ON"/"OFF"
+    CMD_PERSON_SET,  // data = "ON"/"OFF"
 } cmd_type_t;
 
 typedef struct {
@@ -341,6 +343,27 @@ static void publish_discovery(void)
         announce("binary_sensor", object, z);
     }
 
+    // On-device person detection and line crossing.
+    cJSON *pl = entity("person_local", "Person (local)", NULL);
+    topic(t, "person_local");
+    cJSON_AddStringToObject(pl, "state_topic", t);
+    cJSON_AddStringToObject(pl, "value_template", "{{ 'ON' if value_json.detected else 'OFF' }}");
+    cJSON_AddStringToObject(pl, "device_class", "occupancy");
+    cJSON_AddStringToObject(pl, "json_attributes_topic", t);
+    announce("binary_sensor", "person_local", pl);
+
+    cJSON *psw = entity("person_detection", "Person detection (local)", "config");
+    topic(t, "person_local/set");
+    cJSON_AddStringToObject(psw, "command_topic", t);
+    topic(t, "telemetry");
+    cJSON_AddStringToObject(psw, "state_topic", t);
+    cJSON_AddStringToObject(psw, "value_template", "{{ 'ON' if value_json.person_local_enabled else 'OFF' }}");
+    cJSON_AddStringToObject(psw, "icon", "mdi:account-search");
+    announce("switch", "person_detection", psw);
+
+    add_sensor("line_in_today", "Line in today", "{{ value_json.line_in }}", NULL, NULL, false);
+    add_sensor("line_out_today", "Line out today", "{{ value_json.line_out }}", NULL, NULL, false);
+
     // External AI (spec §15): switch, last object and one binary sensor per tracked label.
     cJSON *aisw = entity("ai_detection", "AI detection", "config");
     topic(t, "ai/set");
@@ -414,6 +437,12 @@ static void publish_telemetry(void)
     cJSON_Delete(ms);
     cJSON_AddNumberToObject(o, "motion_events_today", event_count_today(EV_MOTION_START));
     cJSON_AddBoolToObject(o, "ai_enabled", strcmp(ai_mgr_state(), "off") != 0);
+    cJSON_AddBoolToObject(o, "person_local_enabled", strcmp(person_mgr_state(), "off") != 0);
+    cJSON_AddBoolToObject(o, "person_local", person_mgr_present());
+    uint32_t lin, lout;
+    motion_mgr_line_counts(&lin, &lout);
+    cJSON_AddNumberToObject(o, "line_in", lin);
+    cJSON_AddNumberToObject(o, "line_out", lout);
     cJSON_AddStringToObject(o, "ai_state", ai_mgr_state());
     cJSON_AddStringToObject(o, "last_object", ai_mgr_last_object()[0] ? ai_mgr_last_object() : "none");
     char url[48];
@@ -497,6 +526,8 @@ static void handle_message(esp_mqtt_event_handle_t ev)
 
     char cmd_t[TOPIC_LEN], set_t[TOPIC_LEN], ha_t[TOPIC_LEN], mot_t[TOPIC_LEN], ai_t[TOPIC_LEN];
     topic(ai_t, "ai/set");
+    char pl_t[TOPIC_LEN];
+    topic(pl_t, "person_local/set");
     topic(cmd_t, "command");
     topic(set_t, "camera/set");
     topic(mot_t, "motion/set");
@@ -506,6 +537,9 @@ static void handle_message(esp_mqtt_event_handle_t ev)
         if (strcmp(data, "online") == 0 && s_cfg.discovery) {
             post(CMD_DISCOVERY, NULL);  // HA restarted: re-announce entities
         }
+    } else if (strcmp(t, pl_t) == 0) {
+        post(CMD_PERSON_SET, data);
+        return;
     } else if (strcmp(t, ai_t) == 0) {
         post(CMD_AI_SET, data);
         return;
@@ -636,6 +670,8 @@ static void on_connected(void)
     esp_mqtt_client_subscribe(s_client, t, 1);
     topic(t, "ai/set");
     esp_mqtt_client_subscribe(s_client, t, 1);
+    topic(t, "person_local/set");
+    esp_mqtt_client_subscribe(s_client, t, 1);
     topic(t, "motion");
     esp_mqtt_client_publish(s_client, t, motion_mgr_active() ? "ON" : "OFF", 0, s_cfg.qos, true);
     if (s_cfg.discovery) {
@@ -701,6 +737,11 @@ static void worker_task(void *arg)
             case CMD_AI_SET:
                 ai_mgr_set_enabled(strcmp(c.data, "ON") == 0);
                 vTaskDelay(pdMS_TO_TICKS(600));  // let the AI task leave the "off" state
+                publish_telemetry();
+                break;
+            case CMD_PERSON_SET:
+                person_mgr_set_enabled(strcmp(c.data, "ON") == 0);
+                vTaskDelay(pdMS_TO_TICKS(600));
                 publish_telemetry();
                 break;
             case CMD_RESTART_CLIENT:

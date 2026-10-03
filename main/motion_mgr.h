@@ -25,3 +25,8 @@ cJSON *motion_mgr_debug_json(void);
 bool motion_mgr_zone(int i, char *name, size_t len);
 // Name of the first configured zone containing point (x, y) in 0..1000 frame units.
 bool motion_mgr_zone_at(int x, int y, char *name, size_t len);
+// Bounding box (0..1000 frame units) of the changed area in the latest analysis, if it is
+// younger than max_age_us. Used to crop the frame for on-device person detection.
+bool motion_mgr_blob(int *x, int *y, int *w, int *h, int64_t max_age_us);
+// Line-crossing counters since local midnight.
+void motion_mgr_line_counts(uint32_t *in, uint32_t *out);

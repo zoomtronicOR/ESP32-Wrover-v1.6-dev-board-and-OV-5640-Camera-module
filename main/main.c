@@ -11,6 +11,7 @@
 #include "event_mgr.h"
 #include "llm_mgr.h"
 #include "motion_mgr.h"
+#include "person_mgr.h"
 #include "mqtt_mgr.h"
 #include "status_led.h"
 #include "sysmon.h"
@@ -41,6 +42,7 @@ void app_main(void)
     wifi_mgr_init();
     mqtt_mgr_init();
     motion_mgr_init();
+    person_mgr_init();
     ai_mgr_init();
     llm_mgr_init();
     web_server_start();

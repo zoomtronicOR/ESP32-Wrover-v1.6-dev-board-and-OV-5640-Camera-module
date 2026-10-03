@@ -79,6 +79,8 @@ Zaštita je uključena od prvog pokretanja. Dok je inicijalna lozinka aktivna, w
 | POST | `/api/ai/test` | Jedna inferencija odmah (objekti + analizirani frame) |
 | GET/POST | `/api/llm` | Podešavanja AI opisa (vision LLM) |
 | POST | `/api/llm/test` | Opis trenutne slike (rezultat stiže u status) |
+| GET/POST | `/api/person` | Lokalna detekcija osobe (na ESP32): podešavanja i stanje |
+| POST | `/api/person/test` | Jedna provera odmah (skor + isečak 96×96 koji model vidi) |
 | GET | `/api/events` | Dnevnik događaja (`?limit=N`) |
 | GET | `/api/events/snapshot?id=N` | Snapshot događaja |
 | POST | `/api/events/clear` | Briše događaje |
@@ -111,6 +113,9 @@ Podešava se na tabu **MQTT / HA**. Topici imaju oblik `camera/<device>/…`, gd
 | `motion`, `motion/zoneN` | `ON` / `OFF` (retained) |
 | `motion/set` | `ON` / `OFF`: uključuje ili isključuje detekciju pokreta |
 | `person`, `car`, … | JSON po praćenoj klasi: `{"detected":true,"confidence":0.92,"x","y","width","height","zone","timestamp"}` (retained) |
+| `person_local` | JSON lokalne detekcije osobe `{"detected","confidence","zone","timestamp"}` (retained) |
+| `person_local/set` | `ON` / `OFF`: uključuje ili isključuje lokalnu detekciju osobe |
+| `line` | JSON brojača prelaska linije `{"in","out","last"}` (retained) |
 | `description` | JSON poslednjeg događaja sa AI opisom (retained) |
 | `ai/set` | `ON` / `OFF`: uključuje ili isključuje AI; komande `ai_on` / `ai_off` na `command` |
 | `camera/set` | JSON podešavanja kamere, npr. `{"vflip":1,"quality":10}` |
@@ -126,6 +131,23 @@ Tab **Motion**: zone se crtaju prevlačenjem preko slike. Heatmap prikazuje šta
 - *Cooldown*: koliko mirnih sekundi pre nego što pokret završi.
 
 Nagla promena većine slike, npr. kad se upali svetlo, ne pokreće alarm. Dok je detekcija uključena, senzor ne ide u standby.
+
+## Lokalna detekcija osobe (na samom ESP32)
+
+Radi bez servera i bez interneta: TensorFlow Lite Micro model „person detection“ (Apache-2.0, 96×96, ~300 KB) izvršava se na ESP32.
+- **Rezultat:** samo „osoba / nije osoba“ sa verovatnoćom, bez okvira i bez drugih klasa.
+- **Brzina:** oko 0,7 s po proveri.
+- **Kada radi:** dok traje pokret (podrazumevano) ili stalno. Model gleda kvadrat isečen oko mesta pokreta, pa prepoznaje i udaljenije osobe.
+- **Događaji:** posle *confirm* uzastopnih pogodaka iznad praga stiže `person_detected_local` (sa snapshot-om i zonom), a posle *left after* sekundi bez pogotka `person_left_local`.
+- **HA:** binary senzor „Person (local)“ i prekidač „Person detection (local)“.
+
+## Prelazak linije
+
+Na Motion tabu: **Draw line**, pa prevuci liniju preko prolaza. Strelica pokazuje smer **IN** („Swap IN/OUT“ ga okreće). Snima se sa **Save zones**.
+- Kamera prati težište pokreta i broji prelaske, uz histerezu oko linije.
+- Događaji `line_in` / `line_out`; HA senzori „Line in today“ / „Line out today“.
+- Linija i brojači se vide i na Live View-u.
+- Radi dok je detekcija pokreta uključena. Najpouzdanije je kad kroz prolaz ide jedna osoba odjednom.
 
 ## AI detekcija objekata
 
@@ -150,7 +172,7 @@ Kamera može da pošalje snapshot događaja (pokret ili AI objekat) vision model
 - [x] **Faza 2, web UI:** Dashboard, Live View, Camera (sva podešavanja senzora), Network, System
 - [x] **Faza 3, MQTT + Home Assistant:** discovery (kamera, dijagnostički senzori, dugmad), telemetrija, komande, Last Will
 - [x] **Faza 4, detekcija pokreta:** razlika frame-ova sa kompenzacijom osvetljenja, do 4 zone, event engine sa snapshot-ima, HA binary senzori
-- [ ] Faza 5: lokalni AI (ESP-DL)
+- [x] **Faza 5, lokalni AI:** detekcija osobe na ESP32 (TFLite Micro), prelazak linije sa brojanjem IN/OUT
 - [ ] Faza 6: microSD, timelapse, pregled događaja
 - [x] **AI opis događaja** preko vision LLM-a (Ollama / Open WebUI)
 - [x] **Faza 7, eksterni AI:** HTTP AI server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom, HA senzori po klasi, okviri na Live View-u

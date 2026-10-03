@@ -17,6 +17,7 @@
 #include "event_mgr.h"
 #include "llm_mgr.h"
 #include "motion_mgr.h"
+#include "person_mgr.h"
 #include "mqtt_mgr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -179,6 +180,7 @@ cJSON *web_status_json(void)
     cJSON_AddItemToObject(o, "motion", motion_mgr_state_json());
     cJSON_AddItemToObject(o, "ai", ai_mgr_state_json());
     cJSON_AddItemToObject(o, "llm", llm_mgr_state_json());
+    cJSON_AddItemToObject(o, "person", person_mgr_state_json());
 
     // Modules from later phases report their state here once implemented.
     cJSON *m = cJSON_AddObjectToObject(o, "modules");
@@ -187,6 +189,7 @@ cJSON *web_status_json(void)
     cJSON_AddStringToObject(m, "sd", "n/a");
     cJSON_AddStringToObject(m, "ai", ai_mgr_state());
     cJSON_AddStringToObject(m, "llm", llm_mgr_state());
+    cJSON_AddStringToObject(m, "person", person_mgr_state());
     cJSON_AddStringToObject(m, "motion", motion_mgr_active() ? "active" : "idle");
     cJSON_AddStringToObject(m, "ota", "ok");
     cJSON_AddBoolToObject(o, "auth_enabled", auth_mgr_enabled());
@@ -738,6 +741,32 @@ static esp_err_t llm_test_post(httpd_req_t *req)
                                                          : NULL);
 }
 
+static esp_err_t person_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "config", person_mgr_config_json());
+    cJSON_AddItemToObject(o, "state", person_mgr_state_json());
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t person_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!cJSON_IsObject(body)) {
+        cJSON_Delete(body);
+        return send_result(req, ESP_ERR_INVALID_ARG, "expected a JSON object");
+    }
+    char err[96] = "";
+    esp_err_t e = person_mgr_set_config(body, err, sizeof(err));
+    cJSON_Delete(body);
+    return send_result(req, e, err[0] ? err : NULL);
+}
+
+static esp_err_t person_test_post(httpd_req_t *req)
+{
+    return send_json(req, person_mgr_test_json(), NULL);
+}
+
 static esp_err_t events_get(httpd_req_t *req)
 {
     char q[32], v[8];
@@ -950,7 +979,7 @@ esp_err_t web_server_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     cfg.ctrl_port = 32768;
-    cfg.max_uri_handlers = 52;
+    cfg.max_uri_handlers = 56;
     cfg.max_open_sockets = 7;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
@@ -996,6 +1025,9 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/llm", HTTP_GET, llm_get);
     reg(s_api, "/api/llm", HTTP_POST, llm_post);
     reg(s_api, "/api/llm/test", HTTP_POST, llm_test_post);
+    reg(s_api, "/api/person", HTTP_GET, person_get);
+    reg(s_api, "/api/person", HTTP_POST, person_post);
+    reg(s_api, "/api/person/test", HTTP_POST, person_test_post);
     reg(s_api, "/api/events", HTTP_GET, events_get);
     reg(s_api, "/api/events/clear", HTTP_POST, events_clear_post);
     reg(s_api, "/api/events/snapshot", HTTP_GET, event_snapshot_get);

@@ -65,7 +65,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .ev img{width:96px;height:72px;object-fit:cover;border-radius:4px;background:#000}
 .ev .noimg{width:96px;height:72px;border-radius:4px;background:var(--bg);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px}
 .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--bg);margin-right:6px}
-.badge.motion_start{background:#ff3b30;color:#fff}.badge.motion_end{background:var(--warn);color:#fff}
+.badge.motion_start,.badge.person_detected_local{background:#ff3b30;color:#fff}.badge.line_in,.badge.line_out{background:#0891b2;color:#fff}.badge.motion_end{background:var(--warn);color:#fff}
 #login{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;z-index:20;padding:16px}
 #login .card{width:100%;max-width:340px}
 #login input{width:100%;margin-bottom:10px}
@@ -145,11 +145,14 @@ progress{width:100%;height:14px}
       <div class="toolbar">
         <button class="b sec" id="zrefresh">Refresh image</button>
         <label class="muted"><input type="checkbox" id="zheat"> Show difference heatmap</label>
+        <button class="b sec" id="lineDraw">Draw line</button>
+        <label class="muted"><input type="checkbox" id="lineInv"> Swap IN/OUT</label>
+        <button class="b sec" id="lineDel">Remove line</button>
         <span style="flex:1"></span>
         <button class="b" id="zsave">Save zones</button>
       </div>
       <div class="zlist" id="zlist"></div>
-      <p class="muted" style="margin:6px 0 0">No zones = the whole frame is watched.</p>
+      <p class="muted" style="margin:6px 0 0">No zones = the whole frame is watched. Line crossing: click <b>Draw line</b>, drag across the passage; the arrow shows the IN direction. Save with <b>Save zones</b>.</p>
     </div>
     <div class="card"><h2>Motion detection</h2>
       <form class="f" id="motform">
@@ -170,6 +173,26 @@ progress{width:100%;height:14px}
 </section>
 
 <section id="ai">
+  <div class="cols">
+    <div class="card"><h2>On-device person detection <span class="muted" style="font-weight:400">— runs on the ESP32, no server</span></h2>
+      <form class="f" id="pform">
+        <label>Enabled</label><div><input type="checkbox" id="p_enabled" class="switch"></div>
+        <label>Run</label><select id="p_mode"><option value="0">Only while motion is detected</option><option value="1">Continuously</option></select>
+        <label>Threshold %</label><input type="number" id="p_threshold" min="1" max="99">
+        <label>Interval (ms)</label><input type="number" id="p_interval_ms" min="300" max="60000">
+        <label>Confirm (hits)</label><input type="number" id="p_confirm" min="1" max="10">
+        <label>Left after (s)</label><input type="number" id="p_absent_s" min="1" max="600">
+        <label>Event snapshot</label><div><input type="checkbox" id="p_snapshot" class="switch"></div>
+        <label>Snapshot to MQTT</label><div><input type="checkbox" id="p_mqtt_snapshot" class="switch"></div>
+        <span></span><div class="toolbar" style="margin:0"><button class="b" type="submit">Save</button><button class="b sec" type="button" id="ptestbtn">Test now</button></div>
+      </form>
+      <p class="muted">TensorFlow Lite Micro person model (96×96 grayscale, ~0.7 s per check). While motion is active the model looks at a square around the moving area, so people further away still fill its input. Answers only "person / no person" — no boxes, no other classes.</p>
+    </div>
+    <div class="card"><h2>Person status</h2><table id="pstate"></table>
+      <h2 style="margin-top:14px">What the model sees <span class="muted" id="ptestinfo" style="font-weight:400"></span></h2>
+      <canvas id="pcanvas" width="96" height="96" style="width:192px;height:192px;image-rendering:pixelated;border-radius:6px;background:#000"></canvas>
+    </div>
+  </div>
   <div class="cols">
     <div class="card"><h2>External AI server</h2>
       <form class="f" id="aiform" autocomplete="off">
@@ -361,7 +384,7 @@ function showTab(id) {
   clearInterval(heatTimer);
   if (id === 'motion') loadMotion();
   if (id === 'events') loadEvents();
-  if (id === 'ai') { loadAi(); loadLlm(); }
+  if (id === 'ai') { loadAi(); loadLlm(); loadPerson(); }
   clearInterval(telTimer);
   if (id === 'system') { loadSecurity(); loadOta(); loadSystem(); loadTelemetry(); telTimer = setInterval(loadTelemetry, 2000); }
   try { localStorage.setItem('tab', id); } catch (e) {}
@@ -387,6 +410,7 @@ function renderStatus(s) {
     pill('PSRAM', s.psram_total ? (psramPct < 0.2 ? 'warn' : 'ok') : 'bad', fmtBytes(s.psram_free) + ' free') +
     pill('MQTT', s.modules.mqtt === 'connecting' ? 'warn' : mod(s.modules.mqtt), s.modules.mqtt) + pill('HA', s.modules.ha === 'connecting' ? 'warn' : mod(s.modules.ha), s.modules.ha) +
     pill('Motion', s.motion && s.motion.enabled ? (s.motion.active ? 'bad' : 'ok') : '', s.motion && s.motion.active ? 'motion!' : 'idle') +
+    pill('Person', s.person && s.person.state !== 'off' ? (s.person.present ? 'bad' : 'ok') : '', s.person ? 'local person: ' + (s.person.present ? 'present' : s.person.state) : '') +
     pill('SD', mod(s.modules.sd), 'Phase 6') + pill('AI', { ok: 'ok', idle: 'ok', error: 'bad' }[s.modules.ai] || '', 'AI ' + s.modules.ai);
   const c = s.camera;
   const m = [
@@ -404,7 +428,7 @@ function renderStatus(s) {
   if (document.querySelector('#mqtt.active')) renderMqtt();
   renderLiveZones();
   if (document.querySelector('#motion.active')) { renderMotState(); drawZones(); }
-  if (document.querySelector('#ai.active')) { renderAiState(); renderLlmState(); }
+  if (document.querySelector('#ai.active')) { renderAiState(); renderLlmState(); renderPersonState(); }
 }
 function connectWS() {
   let ws;
@@ -503,7 +527,7 @@ $('camdefaults').onclick = async () => { try { camCfg = await api('/api/camera/d
 $('camreload').onclick = loadCamera;
 
 /* ---------- motion ---------- */
-let motCfg = null, zones = [], heatTimer = null, heat = null, drag = null;
+let motCfg = null, zones = [], heatTimer = null, heat = null, drag = null, line = null, lineMode = false;
 async function loadMotionCfg() { try { const m = await api('/api/motion'); motCfg = m.config; renderLiveZones(); return m; } catch (e) { return null; } }
 function renderLiveZones() {
   const box = $('livezones'); if (!box || !motCfg) return;
@@ -514,7 +538,11 @@ function renderLiveZones() {
   const iw = img.naturalWidth * r, ih = img.naturalHeight * r, ox = (vw - iw) / 2, oy = (vh - ih) / 2;
   const st = status && status.motion ? status.motion.zones : [];
   const list = motCfg.zones.length ? motCfg.zones : (motCfg.enabled ? [{ name: 'Full frame', x: 0, y: 0, w: 1000, h: 1000 }] : []);
-  box.innerHTML = list.map((z, i) => { const a = st[i] && st[i].active;
+  const lst = status && status.motion && status.motion.line;
+  const lineSvg = motCfg.line ? (() => { const l = motCfg.line; const X = v => ox + v / 1000 * iw, Y = v => oy + v / 1000 * ih;
+    return `<svg style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"><line x1="${X(l.x1)}" y1="${Y(l.y1)}" x2="${X(l.x2)}" y2="${Y(l.y2)}" stroke="#22d3ee" stroke-width="3"/>`
+      + `<text x="${X((l.x1 + l.x2) / 2) + 6}" y="${Y((l.y1 + l.y2) / 2) - 6}" fill="#22d3ee" font-size="12" font-family="monospace">IN ${lst ? lst.in : 0} · OUT ${lst ? lst.out : 0}</text></svg>`; })() : '';
+  box.innerHTML = lineSvg + list.map((z, i) => { const a = st[i] && st[i].active;
     return `<div class="zone${a ? ' on' : ''}" style="left:${ox + z.x / 1000 * iw}px;top:${oy + z.y / 1000 * ih}px;width:${z.w / 1000 * iw}px;height:${z.h / 1000 * ih}px">${esc(z.name)}${st[i] ? ' ' + st[i].pct + '%' : ''}</div>`; }).join('');
 }
 async function loadMotion() {
@@ -525,6 +553,7 @@ async function loadMotion() {
   for (const k of ['enabled', 'snapshot', 'mqtt_snapshot']) $('mo_' + k).checked = c[k];
   $('mo_sens_v').textContent = c.sensitivity;
   zones = c.zones.map(z => ({ ...z }));
+  line = c.line ? { ...c.line } : null; $('lineInv').checked = !!(line && line.invert); lineMode = false; $('lineDraw').classList.remove('active');
   renderZoneList(); refreshZoneImage();
   heatTimer = setInterval(() => { if ($('zheat').checked) loadHeat(); }, 1000);
 }
@@ -551,8 +580,9 @@ function drawZones() {
     for (let i = 0; i < heat.cells.length; i++) { const q = heat.cells.charCodeAt(i) - 48; if (q < 2) continue;
       g.fillStyle = `rgba(255,${Math.max(0, 200 - q * 22)},0,${Math.min(0.75, q / 10)})`; g.fillRect((i % heat.w) * cw, Math.floor(i / heat.w) * ch, cw + 0.5, ch + 0.5); }
   }
+  drawLine(g, W, H, drag && drag.line ? drag : line, drag && drag.line ? '#4f8cff' : '#22d3ee');
   const st = status && status.motion ? status.motion.zones : [];
-  const all = drag ? [...zones, drag] : zones;
+  const all = drag && !drag.line ? [...zones, drag] : zones;
   all.forEach((z, i) => {
     const a = zones.length && st[i] && st[i].active;
     g.strokeStyle = z === drag ? '#4f8cff' : a ? '#ff3b30' : '#ffd600'; g.lineWidth = 2;
@@ -560,12 +590,32 @@ function drawZones() {
     g.fillStyle = g.strokeStyle; g.font = '12px system-ui'; g.fillText(z.name || '', z.x / 1000 * W + 4, z.y / 1000 * H + 14);
   });
 }
+// Line crossing: arrow from the midpoint along the normal (-dy, dx) = IN (flipped when inverted).
+function drawLine(g, W, H, l, color) {
+  if (!l) return;
+  const x1 = l.x1 / 1000 * W, y1 = l.y1 / 1000 * H, x2 = l.x2 / 1000 * W, y2 = l.y2 / 1000 * H;
+  g.strokeStyle = color; g.fillStyle = color; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+  let nx = -(y2 - y1), ny = x2 - x1; const n = Math.hypot(nx, ny) || 1; nx /= n; ny /= n;
+  if (l.invert) { nx = -nx; ny = -ny; }
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, ax = mx + nx * 34, ay = my + ny * 34;
+  g.lineWidth = 2; g.beginPath(); g.moveTo(mx, my); g.lineTo(ax, ay); g.stroke();
+  g.beginPath(); g.moveTo(ax, ay); g.lineTo(ax - nx * 10 - ny * 6, ay - ny * 10 + nx * 6); g.lineTo(ax - nx * 10 + ny * 6, ay - ny * 10 - nx * 6); g.fill();
+  g.font = 'bold 12px system-ui'; g.fillText('IN', ax + nx * 8 - 6, ay + ny * 8 + 4);
+}
+$('lineDraw').onclick = () => { lineMode = !lineMode; $('lineDraw').textContent = lineMode ? 'Drag to draw…' : 'Draw line'; };
+$('lineDel').onclick = () => { line = null; drawZones(); toast('Line removed (press Save zones)'); };
+$('lineInv').onchange = () => { if (line) { line.invert = $('lineInv').checked; drawZones(); } };
 function cvPoint(e) { const r = $('zcanvas').getBoundingClientRect(); const t = e.touches ? e.touches[0] : e;
   return { x: Math.max(0, Math.min(1000, Math.round((t.clientX - r.left) / r.width * 1000))), y: Math.max(0, Math.min(1000, Math.round((t.clientY - r.top) / r.height * 1000))) }; }
-function dragStart(e) { if (zones.length >= 4) { toast('Maximum 4 zones'); return; } e.preventDefault(); const p = cvPoint(e); drag = { x0: p.x, y0: p.y, x: p.x, y: p.y, w: 0, h: 0, name: 'Zone ' + (zones.length + 1) }; }
+function dragStart(e) {
+  if (lineMode) { e.preventDefault(); const p = cvPoint(e); drag = { line: true, x1: p.x, y1: p.y, x2: p.x, y2: p.y, invert: $('lineInv').checked }; return; }
+  if (zones.length >= 4) { toast('Maximum 4 zones'); return; } e.preventDefault(); const p = cvPoint(e); drag = { x0: p.x, y0: p.y, x: p.x, y: p.y, w: 0, h: 0, name: 'Zone ' + (zones.length + 1) }; }
 function dragMove(e) { if (!drag) return; e.preventDefault(); const p = cvPoint(e);
+  if (drag.line) { drag.x2 = p.x; drag.y2 = p.y; drawZones(); return; }
   drag.x = Math.min(drag.x0, p.x); drag.y = Math.min(drag.y0, p.y); drag.w = Math.abs(p.x - drag.x0); drag.h = Math.abs(p.y - drag.y0); drawZones(); }
 function dragEnd() { if (!drag) return; const z = drag; drag = null;
+  if (z.line) { if (Math.hypot(z.x2 - z.x1, z.y2 - z.y1) >= 60) { line = { x1: z.x1, y1: z.y1, x2: z.x2, y2: z.y2, invert: z.invert }; } lineMode = false; $('lineDraw').textContent = 'Draw line'; drawZones(); return; }
   if (z.w >= 20 && z.h >= 20) { zones.push({ name: z.name, x: z.x, y: z.y, w: z.w, h: z.h }); renderZoneList(); } drawZones(); }
 const zc = $('zcanvas');
 zc.addEventListener('mousedown', dragStart); window.addEventListener('mousemove', dragMove); window.addEventListener('mouseup', dragEnd);
@@ -576,12 +626,13 @@ function renderZoneList() {
 $('zlist').oninput = e => { if (e.target.dataset.i !== undefined) { zones[+e.target.dataset.i].name = e.target.value; drawZones(); } };
 $('zlist').onclick = e => { if (e.target.dataset.del !== undefined) { zones.splice(+e.target.dataset.del, 1); renderZoneList(); drawZones(); } };
 $('zsave').onclick = async () => {
-  try { await api('/api/motion', { zones: zones.map(z => ({ name: z.name.trim() || 'Zone', x: z.x, y: z.y, w: z.w, h: z.h })) }); toast('Zones saved'); loadMotionCfg(); } catch (e) { toast(e.message); }
+  try { await api('/api/motion', { zones: zones.map(z => ({ name: z.name.trim() || 'Zone', x: z.x, y: z.y, w: z.w, h: z.h })), line: line ? { x1: line.x1, y1: line.y1, x2: line.x2, y2: line.y2, invert: !!line.invert } : null }); toast('Zones and line saved'); loadMotionCfg(); } catch (e) { toast(e.message); }
 };
 function renderMotState() {
   const m = status && status.motion; if (!m) return;
   const rows = [['State', !m.enabled ? 'disabled' : m.active ? 'MOTION' : 'idle'], ['Changed area', m.changed_pct + '%'], ['Analysis time', m.analyse_ms + ' ms'],
-    ['Frames analysed', m.analysed], ['Lighting changes ignored', m.scene_changes], ['Events today', m.events_today]]
+    ['Frames analysed', m.analysed], ['Lighting changes ignored', m.scene_changes], ['Events today', m.events_today],
+    ['Line IN / OUT today', m.line && m.line.enabled ? `${m.line.in} / ${m.line.out}${m.line.last ? ' (last: ' + m.line.last + ')' : ''}` : 'no line']]
     .concat(m.zones.map(z => [z.name, (z.active ? 'MOTION ' : '') + z.pct + '%']));
   $('motstate').innerHTML = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
 }
@@ -596,7 +647,7 @@ function renderEvents() {
   $('evcount').textContent = `${list.length} event(s)`;
   $('evlist').innerHTML = list.length ? list.map(e => `<div class="ev">${e.snapshot ? `<a href="${e.snapshot}" target="_blank"><img loading="lazy" src="${e.snapshot}" alt=""></a>` : '<div class="noimg">no image</div>'}
     <div><span class="badge ${e.event}">${esc(e.event)}</span>${e.zone ? `<b>${esc(e.zone)}</b> ` : ''}<span class="muted">${esc(e.time || 'uptime ' + e.uptime + ' s')}</span>
-    <div class="muted">${e.event.startsWith('motion') ? 'area ' + e.value + '%' : e.event.startsWith('object') ? 'confidence ' + e.value + '%' : ''} ${esc(e.detail || '')}</div>${e.description ? `<div style="margin-top:3px">🤖 ${esc(e.description)}</div>` : ''}</div></div>`).join('') : '<p class="muted">No events yet.</p>';
+    <div class="muted">${e.event.startsWith('motion') ? 'area ' + e.value + '%' : e.event.startsWith('object') || e.event.startsWith('person') ? 'confidence ' + e.value + '%' : e.event.startsWith('line') ? 'count today ' + e.value : ''} ${esc(e.detail || '')}</div>${e.description ? `<div style="margin-top:3px">🤖 ${esc(e.description)}</div>` : ''}</div></div>`).join('') : '<p class="muted">No events yet.</p>';
 }
 function onEvent(e) {
   delete e.type;
@@ -604,11 +655,48 @@ function onEvent(e) {
   if (document.querySelector('#events.active')) renderEvents();
   if (e.event === 'motion_start') toast(`Motion: ${e.zone || ''}`);
   if (e.event === 'object_detected') toast(`Detected: ${e.object}${e.zone ? ' in ' + e.zone : ''}`);
+  if (e.event === 'person_detected_local') toast(`Person (on-device)${e.zone ? ' in ' + e.zone : ''}: ${e.value}%`);
+  if (e.event === 'line_in' || e.event === 'line_out') toast(`Line crossed: ${e.event === 'line_in' ? 'IN' : 'OUT'} (${e.value} today)`);
 }
 $('evfilter').onchange = renderEvents;
 $('evrefresh').onclick = loadEvents;
 $('evclear').onclick = async () => { if (!confirm('Delete all events and their snapshots?')) return; try { await api('/api/events/clear', {}); events = []; renderEvents(); } catch (e) { toast(e.message); } };
 window.addEventListener('resize', () => { renderLiveZones(); drawZones(); });
+
+/* ---------- on-device person detection ---------- */
+const P_NUM = ['mode', 'threshold', 'interval_ms', 'confirm', 'absent_s'], P_BOOL = ['enabled', 'snapshot', 'mqtt_snapshot'];
+async function loadPerson() {
+  try {
+    const p = await api('/api/person'), c = p.config;
+    for (const k of P_NUM) $('p_' + k).value = c[k];
+    for (const k of P_BOOL) $('p_' + k).checked = c[k];
+    renderPersonState();
+  } catch (e) {}
+}
+$('pform').onsubmit = async e => {
+  e.preventDefault();
+  const body = {};
+  for (const k of P_NUM) body[k] = Number($('p_' + k).value);
+  for (const k of P_BOOL) body[k] = $('p_' + k).checked;
+  try { await api('/api/person', body); toast('Person detection saved'); } catch (x) { toast(x.message); }
+};
+function renderPersonState() {
+  const p = status && status.person; if (!p) return;
+  const rows = [['State', p.state], ['Person', p.present ? 'PRESENT' : 'not present'], ['Last score', p.inferences ? p.score + '%' : '—'],
+    ['Inference', p.inference_ms ? p.inference_ms + ' ms (total ' + p.total_ms + ' ms)' : '—'], ['Checks', p.inferences], ['Detected today', p.today], ['Last error', p.last_error || '—']];
+  $('pstate').innerHTML = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
+}
+$('ptestbtn').onclick = async () => {
+  $('ptestinfo').textContent = 'running…';
+  try {
+    const r = await api('/api/person/test', {});
+    if (r.error) { $('ptestinfo').textContent = r.error; return; }
+    $('ptestinfo').textContent = `person ${r.score}% · ${r.inference_ms} ms inference, ${r.total_ms} ms total`;
+    const raw = atob(r.image), g = $('pcanvas').getContext('2d'), img = g.createImageData(r.size, r.size);
+    for (let i = 0; i < raw.length; i++) { const v = raw.charCodeAt(i); img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255; }
+    g.putImageData(img, 0, 0);
+  } catch (e) { $('ptestinfo').textContent = e.message; }
+};
 
 /* ---------- AI ---------- */
 const AI_NUM = ['api', 'mode', 'interval_ms', 'timeout_ms', 'enter_conf', 'keep_conf', 'persist_ms', 'absent_ms'];
