@@ -22,6 +22,8 @@ typedef enum {
     EV_LOW_MEMORY,
     EV_OBJECT_DETECTED,  // detail = label
     EV_OBJECT_LEFT,      // detail = label
+    EV_OTA_STARTED,
+    EV_OTA_FINISHED,     // value 1 = ok, 2 = rollback, 0 = failed (detail = reason)
     EV_TYPE_COUNT
 } event_type_t;
 

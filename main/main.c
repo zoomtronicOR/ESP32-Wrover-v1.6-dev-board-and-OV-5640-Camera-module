@@ -7,6 +7,7 @@
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "ai_mgr.h"
+#include "auth_mgr.h"
 #include "event_mgr.h"
 #include "llm_mgr.h"
 #include "motion_mgr.h"
@@ -36,6 +37,7 @@ void app_main(void)
         status_led_set(LED_ERROR);
     }
     sysmon_init();
+    auth_mgr_init();  // before Wi-Fi: provides the setup AP password
     wifi_mgr_init();
     mqtt_mgr_init();
     motion_mgr_init();
@@ -44,6 +46,14 @@ void app_main(void)
     web_server_start();
     console_cmds_start();
 
-    // Reaching this point means the new firmware boots: cancel a pending OTA rollback.
-    esp_ota_mark_app_valid_cancel_rollback();
+    // Reaching this point means the new firmware boots: cancel a pending OTA rollback. The otadata
+    // write erases a flash sector, which hangs the CPU (interrupt watchdog) while the camera DMA
+    // runs on this ESP32 + PSRAM, so the camera is paused around it.
+    esp_ota_img_states_t st;
+    if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
+        cam_mgr_suspend(true);
+        esp_ota_mark_app_valid_cancel_rollback();
+        cam_mgr_suspend(false);
+        ESP_LOGI(TAG, "new firmware confirmed (rollback cancelled)");
+    }
 }

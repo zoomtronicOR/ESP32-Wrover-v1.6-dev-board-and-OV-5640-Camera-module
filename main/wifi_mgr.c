@@ -15,6 +15,7 @@
 #include "esp_wifi.h"
 #include "mdns.h"
 #include "sdkconfig.h"
+#include "auth_mgr.h"
 #include "event_mgr.h"
 #include "status_led.h"
 
@@ -58,14 +59,17 @@ static void start_ap(void)
     wifi_config_t ac = {0};
     strlcpy((char *)ac.ap.ssid, s_ap_ssid, sizeof(ac.ap.ssid));
     ac.ap.ssid_len = strlen(s_ap_ssid);
-    strlcpy((char *)ac.ap.password, CONFIG_SETUP_AP_PASSWORD, sizeof(ac.ap.password));
-    ac.ap.authmode = strlen(CONFIG_SETUP_AP_PASSWORD) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    const char *ap_pass = auth_ap_password();
+    strlcpy((char *)ac.ap.password, ap_pass, sizeof(ac.ap.password));
+    ac.ap.authmode = strlen(ap_pass) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     ac.ap.max_connection = 3;
     ac.ap.channel = 1;
     esp_wifi_set_mode(WIFI_MODE_APSTA);
     esp_wifi_set_config(WIFI_IF_AP, &ac);
     s_ap_active = true;
-    ESP_LOGW(TAG, "setup AP '%s' active (password '%s'), open http://192.168.4.1", s_ap_ssid, CONFIG_SETUP_AP_PASSWORD);
+    bool default_pass = strcmp(ap_pass, CONFIG_SETUP_AP_PASSWORD) == 0;
+    ESP_LOGW(TAG, "setup AP '%s' active (password %s%s%s), open http://192.168.4.1", s_ap_ssid,
+             default_pass ? "'" : "", default_pass ? ap_pass : "set in Security settings", default_pass ? "'" : "");
     status_led_set(LED_AP_MODE);
 }
 

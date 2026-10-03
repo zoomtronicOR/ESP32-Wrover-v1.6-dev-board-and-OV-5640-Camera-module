@@ -66,6 +66,12 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .ev .noimg{width:96px;height:72px;border-radius:4px;background:var(--bg);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px}
 .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--bg);margin-right:6px}
 .badge.motion_start{background:#ff3b30;color:#fff}.badge.motion_end{background:var(--warn);color:#fff}
+#login{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;z-index:20;padding:16px}
+#login .card{width:100%;max-width:340px}
+#login input{width:100%;margin-bottom:10px}
+#authwarn{display:none;background:var(--warn);color:#fff;padding:6px 16px;font-size:13px}
+#authwarn a{color:#fff}
+progress{width:100%;height:14px}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:8px 14px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw}
 #toast.show{opacity:1}
 .scan li{cursor:pointer;padding:3px 0}.scan li:hover{color:var(--accent)}
@@ -77,6 +83,8 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   <h1 id="devname">ESP32 Camera</h1>
   <div class="pills" id="pills"></div>
 </header>
+<div id="authwarn">⚠ No password is set: anyone on your network can view and control this camera. <a href="#" id="authwarnlink">Set a password</a></div>
+<div id="login"><form class="card" id="loginform"><h2>ESP32 Camera — sign in</h2><input type="text" id="lg_user" placeholder="User" autocomplete="username" required><input type="password" id="lg_pass" placeholder="Password" autocomplete="current-password" required><button class="b" type="submit" style="width:100%">Sign in</button><p class="muted" id="lg_msg"></p></form></div>
 <nav id="nav">
   <button data-tab="dash" class="active">Dashboard</button>
   <button data-tab="live">Live View</button>
@@ -273,6 +281,29 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 
 <section id="system">
   <div class="cols">
+    <div class="card"><h2>Security</h2>
+      <form class="f" id="secform" autocomplete="off">
+        <label>Password protection</label><div><input type="checkbox" id="sec_enabled" class="switch"> <span class="muted" id="sec_state"></span></div>
+        <label>User</label><input type="text" id="sec_user" maxlength="32" autocomplete="username">
+        <label>New password</label><input type="password" id="sec_pass" maxlength="64" placeholder="unchanged (min 8 chars)" autocomplete="new-password">
+        <label>Repeat password</label><input type="password" id="sec_pass2" maxlength="64" autocomplete="new-password">
+        <label>Current password</label><input type="password" id="sec_current" maxlength="64" placeholder="required to change password / disable" autocomplete="current-password">
+        <label>Session timeout (min)</label><input type="number" id="sec_session_min" min="5" max="10080">
+        <label>Setup AP password</label><input type="password" id="sec_ap" maxlength="63" placeholder="unchanged">
+        <span></span><div class="toolbar" style="margin:0"><button class="b" type="submit">Save</button><button class="b sec" type="button" id="logoutbtn">Sign out</button></div>
+      </form>
+      <h2 style="margin-top:16px">API token</h2>
+      <p class="muted" style="margin:0 0 6px">For Home Assistant and scripts: header <code>Authorization: Bearer &lt;token&gt;</code> or <code>?token=&lt;token&gt;</code>. Snapshot/stream URLs also accept the user name and password (HTTP Basic), e.g. in HA "Generic camera".</p>
+      <div class="toolbar" style="margin:0"><code id="sec_token" style="word-break:break-all">••••</code><button class="b sec" id="tokshow">Show</button><button class="b sec" id="tokregen">Regenerate</button></div>
+    </div>
+    <div class="card"><h2>Firmware update (OTA)</h2><table id="otatable"></table>
+      <div class="toolbar"><input type="file" id="otafile" accept=".bin"><button class="b" id="otabtn">Upload &amp; install</button></div>
+      <progress id="otaprog" value="0" max="100" style="display:none"></progress>
+      <p class="muted" id="otamsg">Use <code>.pio/build/wrover/firmware.bin</code>. The camera validates the image, switches to it and reboots; if the new firmware does not boot it rolls back automatically.</p>
+      <button class="b sec" id="rollbackbtn">Roll back to previous firmware</button>
+    </div>
+  </div>
+  <div class="cols">
     <div class="card"><h2>Camera telemetry <span class="muted" id="telstate" style="font-weight:400"></span></h2><table id="camtel"></table></div>
     <div class="card"><h2>Module telemetry</h2><table id="modtel"></table></div>
   </div>
@@ -307,6 +338,7 @@ async function api(path, body) {
   const opt = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
   const r = await fetch(path, opt);
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== '/api/login') showLogin();
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
@@ -331,7 +363,7 @@ function showTab(id) {
   if (id === 'events') loadEvents();
   if (id === 'ai') { loadAi(); loadLlm(); }
   clearInterval(telTimer);
-  if (id === 'system') { loadSystem(); loadTelemetry(); telTimer = setInterval(loadTelemetry, 2000); }
+  if (id === 'system') { loadSecurity(); loadOta(); loadSystem(); loadTelemetry(); telTimer = setInterval(loadTelemetry, 2000); }
   try { localStorage.setItem('tab', id); } catch (e) {}
 }
 $('nav').onclick = e => { if (e.target.dataset.tab) showTab(e.target.dataset.tab); };
@@ -340,6 +372,7 @@ $('nav').onclick = e => { if (e.target.dataset.tab) showTab(e.target.dataset.tab
 function pill(name, state, title) { return `<span class="pill" title="${esc(title || '')}"><span class="dot ${state}"></span>${name}</span>`; }
 function renderStatus(s) {
   status = s;
+  $('authwarn').style.display = s.auth_enabled ? 'none' : 'block';
   // NTP blocked or not yet synced: hand the device the browser clock (spec §55 fallback).
   if (!s.time && !renderStatus.sentTime) { renderStatus.sentTime = true; api('/api/time', { epoch: Math.floor(Date.now() / 1000) }).catch(() => {}); }
   $('devname').textContent = s.device;
@@ -664,6 +697,70 @@ function onDescription(d) {
   toast('AI: ' + d.description, 6000);
 }
 
+/* ---------- security / login / OTA ---------- */
+function showLogin() { $('login').style.display = 'flex'; $('lg_user').focus(); }
+$('loginform').onsubmit = async e => {
+  e.preventDefault(); $('lg_msg').textContent = '';
+  try { await api('/api/login', { user: $('lg_user').value, password: $('lg_pass').value }); location.reload(); }
+  catch (x) { $('lg_msg').textContent = x.message; $('lg_pass').value = ''; }
+};
+$('authwarnlink').onclick = e => { e.preventDefault(); showTab('system'); setTimeout(() => $('secform').scrollIntoView({ behavior: 'smooth' }), 100); };
+let secToken = '';
+async function loadSecurity() {
+  try {
+    const c = await api('/api/security');
+    $('sec_enabled').checked = c.enabled; $('sec_user').value = c.user; $('sec_session_min').value = c.session_min;
+    $('sec_state').textContent = c.enabled ? 'ON' : (c.has_password ? 'OFF (password stored)' : 'OFF — no password set');
+    $('sec_ap').placeholder = c.custom_ap_password ? 'unchanged (custom)' : 'default';
+    secToken = c.token; $('sec_token').textContent = '••••••••';
+  } catch (e) {}
+}
+$('secform').onsubmit = async e => {
+  e.preventDefault();
+  if ($('sec_pass').value !== $('sec_pass2').value) return toast('Passwords do not match');
+  const body = { enabled: $('sec_enabled').checked, user: $('sec_user').value.trim(), session_min: +$('sec_session_min').value };
+  if ($('sec_pass').value) body.password = $('sec_pass').value;
+  if ($('sec_current').value) body.current_password = $('sec_current').value;
+  if ($('sec_ap').value) body.ap_password = $('sec_ap').value;
+  try {
+    await api('/api/security', body);
+    for (const id of ['sec_pass', 'sec_pass2', 'sec_current', 'sec_ap']) $(id).value = '';
+    toast('Security settings saved'); setTimeout(() => location.reload(), 800);
+  } catch (x) { toast(x.message); }
+};
+$('logoutbtn').onclick = async () => { await api('/api/logout', {}).catch(() => {}); location.reload(); };
+$('tokshow').onclick = () => { $('sec_token').textContent = secToken; };
+$('tokregen').onclick = async () => {
+  if (!confirm('Create a new API token? Anything using the old one stops working.')) return;
+  try { await api('/api/security', { regenerate_token: true }); await loadSecurity(); $('sec_token').textContent = secToken; toast('New token created'); } catch (e) { toast(e.message); }
+};
+async function loadOta() {
+  try {
+    const o = await api('/api/ota');
+    $('otatable').innerHTML = [['Running', `${o.version} (${o.running})`], ['Update slot', `${o.next}, max ${fmtBytes(o.max_size)}`],
+      ['Previous firmware', o.rollback_possible ? `${o.other_version} (${o.other_build})` : 'none']].map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('');
+    $('rollbackbtn').disabled = !o.rollback_possible || !o.allowed;
+    $('otabtn').disabled = !o.allowed;
+    if (!o.allowed) $('otamsg').textContent = 'Firmware updates are only possible with password protection enabled (see Security).';
+  } catch (e) {}
+}
+$('otabtn').onclick = () => {
+  const f = $('otafile').files[0]; if (!f) return toast('Choose firmware.bin first');
+  if (!confirm(`Install ${f.name} (${fmtBytes(f.size)})? The camera reboots afterwards.`)) return;
+  const x = new XMLHttpRequest(); x.open('POST', '/api/ota');
+  $('otaprog').style.display = ''; $('otaprog').value = 0; $('otabtn').disabled = true;
+  x.upload.onprogress = e => { if (e.lengthComputable) { $('otaprog').value = e.loaded / e.total * 100; $('otamsg').textContent = `Uploading… ${Math.round(e.loaded / e.total * 100)}%`; } };
+  x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch (e) {}
+    if (x.status === 200 && j.ok) { $('otamsg').textContent = `Installed ${j.version}. Rebooting… the page reloads in 20 s.`; setTimeout(() => location.reload(), 20000); }
+    else { $('otamsg').textContent = 'Update failed: ' + (j.error || x.status); $('otabtn').disabled = false; } };
+  x.onerror = () => { $('otamsg').textContent = 'Upload failed (connection lost)'; $('otabtn').disabled = false; };
+  x.send(f);
+};
+$('rollbackbtn').onclick = async () => {
+  if (!confirm('Switch back to the previous firmware and reboot?')) return;
+  try { await api('/api/ota/rollback', {}); $('otamsg').textContent = 'Rolling back… the page reloads in 20 s.'; setTimeout(() => location.reload(), 20000); } catch (e) { toast(e.message); }
+};
+
 /* ---------- MQTT / HA ---------- */
 const MQ_FIELDS = ['host', 'port', 'user', 'client_id', 'base', 'qos', 'keepalive', 'telemetry_s', 'snapshot_s', 'disc_prefix'];
 const MQ_BOOLS = ['enabled', 'retain', 'discovery'];
@@ -780,8 +877,12 @@ $('resetallbtn').onclick = async () => { if (!confirm('Reset ALL settings includ
 
 window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
-pollStatus();
-connectWS();
+(async () => {
+  const ses = await fetch('/api/session').then(r => r.json()).catch(() => ({ authorized: true }));
+  if (!ses.authorized) { showLogin(); return; }
+  pollStatus();
+  connectWS();
+})();
 let start = 'dash'; try { start = localStorage.getItem('tab') || 'dash'; } catch (e) {}
 showTab(document.getElementById(start) ? start : 'dash');
 </script>

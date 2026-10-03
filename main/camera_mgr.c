@@ -169,6 +169,7 @@ static uint32_t s_seq;
 static volatile int s_consumers;
 
 static bool s_ok;
+static volatile bool s_suspended;
 static bool s_standby;  // sensor in software power-down (no viewers)
 static bool s_af_ready;
 static uint16_t s_pid;
@@ -579,6 +580,10 @@ static void capture_task(void *arg)
             settle_until = t0 + WAKE_SETTLE_US;
         }
 
+        if (s_suspended) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
         if (!s_ok) {
             if (t0 - last_retry > REINIT_RETRY_MS * 1000LL) {
                 last_retry = t0;
@@ -807,6 +812,24 @@ int cam_mgr_apply_json(const cJSON *obj, char *err, size_t err_len)
     xSemaphoreGive(s_drv_lock);
 #undef REJECT
     return rejected;
+}
+
+void cam_mgr_suspend(bool suspend)
+{
+    xSemaphoreTake(s_drv_lock, portMAX_DELAY);
+    if (suspend && !s_suspended) {
+        s_suspended = true;
+        if (s_ok) {
+            esp_camera_deinit();
+            s_ok = false;
+        }
+        ESP_LOGW(TAG, "camera suspended");
+    } else if (!suspend && s_suspended) {
+        s_suspended = false;
+        s_ok = (driver_start() == ESP_OK);
+        ESP_LOGI(TAG, "camera resumed");
+    }
+    xSemaphoreGive(s_drv_lock);
 }
 
 esp_err_t cam_mgr_restart(void)

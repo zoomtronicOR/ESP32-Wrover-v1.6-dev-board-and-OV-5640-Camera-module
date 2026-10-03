@@ -55,6 +55,8 @@ static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
     [EV_LOW_MEMORY] = "low_memory",
     [EV_OBJECT_DETECTED] = "object_detected",
     [EV_OBJECT_LEFT] = "object_left",
+    [EV_OTA_STARTED] = "ota_started",
+    [EV_OTA_FINISHED] = "ota_finished",
 };
 
 static QueueHandle_t s_queue;

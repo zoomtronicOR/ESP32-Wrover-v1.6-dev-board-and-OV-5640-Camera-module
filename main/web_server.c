@@ -6,7 +6,10 @@
 #include "app_config.h"
 #include "camera_mgr.h"
 #include "esp_app_desc.h"
+#include "auth_mgr.h"
 #include "esp_http_server.h"
+#include "esp_ota_ops.h"
+#include "mbedtls/base64.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -47,7 +50,6 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *json, const char *status)
     }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     esp_err_t err = httpd_resp_sendstr(req, txt ? txt : "{}");
     free(txt);
     return err;
@@ -186,8 +188,259 @@ cJSON *web_status_json(void)
     cJSON_AddStringToObject(m, "ai", ai_mgr_state());
     cJSON_AddStringToObject(m, "llm", llm_mgr_state());
     cJSON_AddStringToObject(m, "motion", motion_mgr_active() ? "active" : "idle");
-    cJSON_AddStringToObject(m, "ota", "n/a");
+    cJSON_AddStringToObject(m, "ota", "ok");
+    cJSON_AddBoolToObject(o, "auth_enabled", auth_mgr_enabled());
     return o;
+}
+
+/* ------------------------------------------------------------------ access control ------ */
+
+// True when the request carries a valid session cookie, API token or Basic credentials.
+static bool request_authorized(httpd_req_t *req)
+{
+    if (!auth_mgr_enabled()) {
+        return true;
+    }
+    char sid[AUTH_SID_LEN + 1];
+    size_t l = sizeof(sid);
+    if (httpd_req_get_cookie_val(req, "sid", sid, &l) == ESP_OK && auth_session_valid(sid)) {
+        return true;
+    }
+    char hdr[200];
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) == ESP_OK) {
+        if (strncmp(hdr, "Bearer ", 7) == 0 && auth_token_valid(hdr + 7)) {
+            return true;
+        }
+        if (strncmp(hdr, "Basic ", 6) == 0) {
+            unsigned char dec[150];
+            size_t dl = 0;
+            if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &dl, (const unsigned char *)hdr + 6, strlen(hdr + 6)) == 0) {
+                dec[dl] = 0;
+                char *colon = strchr((char *)dec, ':');
+                if (colon) {
+                    *colon = 0;
+                    if (auth_basic_valid((char *)dec, colon + 1)) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    char q[128], tok[AUTH_TOKEN_LEN + 2];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK &&
+        httpd_query_key_value(q, "token", tok, sizeof(tok)) == ESP_OK && auth_token_valid(tok)) {
+        return true;
+    }
+    return false;
+}
+
+static esp_err_t send_unauthorized(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "401 Unauthorized");
+    if (strncmp(req->uri, "/api/", 5) != 0) {
+        // Image/stream URLs: let HA / browsers fall back to HTTP Basic credentials.
+        httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"ESP32 Camera\"");
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"unauthorized\"}");
+}
+
+// Every non-public handler is registered through this guard (original handler in user_ctx).
+static esp_err_t guarded(httpd_req_t *req)
+{
+    if (!request_authorized(req)) {
+        return send_unauthorized(req);
+    }
+    return ((esp_err_t(*)(httpd_req_t *))req->user_ctx)(req);
+}
+
+static esp_err_t session_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "auth_enabled", auth_mgr_enabled());
+    cJSON_AddBoolToObject(o, "authorized", request_authorized(req));
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t login_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    const char *user = body ? json_str(body, "user") : NULL;
+    const char *pass = body ? json_str(body, "password") : NULL;
+    char sid[AUTH_SID_LEN + 1];
+    esp_err_t e = auth_login(user, pass, sid);
+    cJSON_Delete(body);
+    if (e == ESP_ERR_INVALID_STATE) {
+        httpd_resp_set_status(req, "429 Too Many Requests");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"too many failed attempts, try again later\"}");
+    }
+    if (e != ESP_OK) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"wrong user name or password\"}");
+    }
+    char cookie[96];
+    snprintf(cookie, sizeof(cookie), "sid=%s; Path=/; HttpOnly; SameSite=Strict", sid);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    return send_result(req, ESP_OK, NULL);
+}
+
+static esp_err_t logout_post(httpd_req_t *req)
+{
+    char sid[AUTH_SID_LEN + 1];
+    size_t l = sizeof(sid);
+    if (httpd_req_get_cookie_val(req, "sid", sid, &l) == ESP_OK) {
+        auth_logout(sid);
+    }
+    httpd_resp_set_hdr(req, "Set-Cookie", "sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
+    return send_result(req, ESP_OK, NULL);
+}
+
+static esp_err_t security_get(httpd_req_t *req)
+{
+    return send_json(req, auth_config_json(), NULL);
+}
+
+static esp_err_t security_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!cJSON_IsObject(body)) {
+        cJSON_Delete(body);
+        return send_result(req, ESP_ERR_INVALID_ARG, "expected a JSON object");
+    }
+    char err[96] = "";
+    esp_err_t e = auth_set_config(body, err, sizeof(err));
+    cJSON_Delete(body);
+    return send_result(req, e, err[0] ? err : NULL);
+}
+
+/* ------------------------------------------------------------------ OTA ------------------- */
+
+static esp_err_t ota_get(httpd_req_t *req)
+{
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "running", run ? run->label : "?");
+    cJSON_AddStringToObject(o, "version", esp_app_get_description()->version);
+    cJSON_AddStringToObject(o, "next", next ? next->label : "?");
+    cJSON_AddNumberToObject(o, "max_size", next ? next->size : 0);
+    esp_app_desc_t d;
+    bool other = next && esp_ota_get_partition_description(next, &d) == ESP_OK;
+    cJSON_AddBoolToObject(o, "rollback_possible", other);
+    if (other) {
+        cJSON_AddStringToObject(o, "other_version", d.version);
+        char built[40];
+        snprintf(built, sizeof(built), "%s %s", d.date, d.time);
+        cJSON_AddStringToObject(o, "other_build", built);
+    }
+    cJSON_AddBoolToObject(o, "allowed", auth_mgr_enabled());
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t ota_forbidden(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"firmware updates require password protection (System > Security)\"}");
+}
+
+static esp_err_t ota_post(httpd_req_t *req)
+{
+    if (!auth_mgr_enabled()) {
+        return ota_forbidden(req);  // spec §26: OTA only with authentication
+    }
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    int total = req->content_len;
+    if (!part || total <= 0 || (size_t)total > part->size) {
+        return send_result(req, ESP_ERR_INVALID_SIZE, "missing firmware or larger than the OTA partition");
+    }
+    ESP_LOGW(TAG, "OTA: receiving %d bytes into %s", total, part->label);
+    status_led_set(LED_OTA);
+    cam_mgr_suspend(true);  // camera DMA + flash writes = interrupt watchdog on ESP32/PSRAM
+    event_post(EV_OTA_STARTED, NULL, total / 1024.0f, part->label, NULL);
+
+    esp_ota_handle_t h = 0;
+    const char *fail = NULL;
+    char *buf = malloc(4096);
+    esp_err_t e = buf ? esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &h) : ESP_ERR_NO_MEM;
+    if (e != ESP_OK) {
+        fail = "cannot start the update";
+    }
+    int left = total;
+    bool first = true;
+    while (!fail && left > 0) {
+        int r = httpd_req_recv(req, buf, left < 4096 ? left : 4096);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (r <= 0) {
+            fail = "upload interrupted";
+            break;
+        }
+        if (first && (uint8_t)buf[0] != 0xE9) {  // ESP image magic byte
+            fail = "not an ESP32 firmware image (use firmware.bin)";
+            break;
+        }
+        first = false;
+        if (esp_ota_write(h, buf, r) != ESP_OK) {
+            fail = "flash write failed";
+            break;
+        }
+        left -= r;
+    }
+    free(buf);
+    esp_app_desc_t d = {0};
+    if (!fail) {
+        if (esp_ota_end(h) != ESP_OK) {
+            fail = "image validation failed";
+        } else if (esp_ota_get_partition_description(part, &d) != ESP_OK ||
+                   strcmp(d.project_name, esp_app_get_description()->project_name) != 0) {
+            fail = "firmware belongs to a different project";
+        } else if (esp_ota_set_boot_partition(part) != ESP_OK) {
+            fail = "cannot select the new firmware";
+        }
+        h = 0;
+    }
+    if (fail) {
+        if (h) {
+            esp_ota_abort(h);
+        }
+        ESP_LOGE(TAG, "OTA failed: %s", fail);
+        event_post(EV_OTA_FINISHED, NULL, 0, fail, NULL);
+        status_led_set(LED_WIFI_CONNECTED);
+        cam_mgr_suspend(false);
+        return send_result(req, ESP_FAIL, fail);
+    }
+    ESP_LOGW(TAG, "OTA: version %s written to %s, restarting", d.version, part->label);
+    event_post(EV_OTA_FINISHED, NULL, 1, d.version, NULL);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", true);
+    cJSON_AddStringToObject(o, "version", d.version);
+    schedule_restart();
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t ota_rollback_post(httpd_req_t *req)
+{
+    if (!auth_mgr_enabled()) {
+        return ota_forbidden(req);
+    }
+    const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
+    esp_app_desc_t d;
+    if (!other || esp_ota_get_partition_description(other, &d) != ESP_OK) {
+        return send_result(req, ESP_ERR_NOT_FOUND, "no previous firmware to roll back to");
+    }
+    cam_mgr_suspend(true);  // otadata write erases flash: see ota_post
+    if (esp_ota_set_boot_partition(other) != ESP_OK) {
+        cam_mgr_suspend(false);
+        return send_result(req, ESP_FAIL, "cannot select the previous firmware");
+    }
+    ESP_LOGW(TAG, "rollback to %s (%s)", other->label, d.version);
+    event_post(EV_OTA_FINISHED, NULL, 2, "rollback", NULL);
+    schedule_restart();
+    return send_result(req, ESP_OK, NULL);
 }
 
 /* ------------------------------------------------------------------ UI -------------------- */
@@ -338,7 +591,6 @@ static esp_err_t snapshot_get(httpd_req_t *req)
     httpd_resp_set_type(req, "image/jpeg");
     httpd_resp_set_hdr(req, "Content-Disposition", disp);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     esp_err_t err = httpd_resp_send(req, (const char *)f->buf, f->len);
     cam_mgr_frame_release(f);
     return err;
@@ -529,6 +781,9 @@ static esp_err_t event_snapshot_get(httpd_req_t *req)
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
+        if (!request_authorized(req)) {
+            return send_unauthorized(req);
+        }
         ESP_LOGI(TAG, "WebSocket client connected (fd %d)", httpd_req_to_sockfd(req));
         return ESP_OK;
     }
@@ -618,7 +873,6 @@ static void stream_task(void *arg)
     ESP_LOGI(TAG, "stream client connected (%d active)", s_stream_clients);
 
     httpd_resp_set_type(req, "multipart/x-mixed-replace;boundary=" STREAM_BOUNDARY);
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
 
     for (;;) {
@@ -656,6 +910,9 @@ static void stream_task(void *arg)
 
 static esp_err_t stream_get(httpd_req_t *req)
 {
+    if (!request_authorized(req)) {
+        return send_unauthorized(req);
+    }
     if (s_stream_clients >= MAX_STREAM_CLIENTS) {
         httpd_resp_set_status(req, "503 Service Unavailable");
         return httpd_resp_sendstr(req, "too many stream clients");
@@ -674,7 +931,14 @@ static esp_err_t stream_get(httpd_req_t *req)
 
 /* ------------------------------------------------------------------ setup ----------------- */
 
+// Protected endpoint: the guard checks authorisation, then calls fn.
 static void reg(httpd_handle_t h, const char *uri, httpd_method_t m, esp_err_t (*fn)(httpd_req_t *))
+{
+    httpd_uri_t u = {.uri = uri, .method = m, .handler = guarded, .user_ctx = (void *)fn};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(h, &u));
+}
+
+static void reg_public(httpd_handle_t h, const char *uri, httpd_method_t m, esp_err_t (*fn)(httpd_req_t *))
 {
     httpd_uri_t u = {.uri = uri, .method = m, .handler = fn};
     ESP_ERROR_CHECK(httpd_register_uri_handler(h, &u));
@@ -685,14 +949,23 @@ esp_err_t web_server_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     cfg.ctrl_port = 32768;
-    cfg.max_uri_handlers = 44;
+    cfg.max_uri_handlers = 52;
     cfg.max_open_sockets = 7;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
     cfg.core_id = 0;
+    cfg.recv_wait_timeout = 15;  // OTA uploads over a busy Wi-Fi
     ESP_ERROR_CHECK(httpd_start(&s_api, &cfg));
 
-    reg(s_api, "/", HTTP_GET, index_get);
+    reg_public(s_api, "/", HTTP_GET, index_get);
+    reg_public(s_api, "/api/session", HTTP_GET, session_get);
+    reg_public(s_api, "/api/login", HTTP_POST, login_post);
+    reg_public(s_api, "/api/logout", HTTP_POST, logout_post);
+    reg(s_api, "/api/security", HTTP_GET, security_get);
+    reg(s_api, "/api/security", HTTP_POST, security_post);
+    reg(s_api, "/api/ota", HTTP_GET, ota_get);
+    reg(s_api, "/api/ota", HTTP_POST, ota_post);
+    reg(s_api, "/api/ota/rollback", HTTP_POST, ota_rollback_post);
     reg(s_api, "/capture", HTTP_GET, snapshot_get);
     reg(s_api, "/api/snapshot", HTTP_GET, snapshot_get);
     reg(s_api, "/api/status", HTTP_GET, status_get);
@@ -737,7 +1010,7 @@ esp_err_t web_server_start(void)
     scfg.stack_size = 4096;
     scfg.core_id = 0;
     ESP_ERROR_CHECK(httpd_start(&s_stream, &scfg));
-    reg(s_stream, "/stream", HTTP_GET, stream_get);
+    reg_public(s_stream, "/stream", HTTP_GET, stream_get);  // checks auth itself
 
     xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, NULL);
     ESP_LOGI(TAG, "web UI on port 80, MJPEG stream on port 81");

@@ -4,6 +4,7 @@
 #include <string.h>
 #include "console_cmds.h"
 #include "app_config.h"
+#include "auth_mgr.h"
 #include "camera_mgr.h"
 #include "esp_console.h"
 #include "esp_log.h"
@@ -115,6 +116,21 @@ static int cmd_ntp(int argc, char **argv)
     return 0;
 }
 
+static int cmd_auth(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "off") == 0) {
+        auth_disable();
+        printf("password protection disabled and password erased; set a new one in System > Security\n");
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "token") == 0) {
+        printf("API token: %s\n", auth_token());
+        return 0;
+    }
+    printf("protection is %s. usage: auth off | auth token\n", auth_mgr_enabled() ? "ON" : "OFF");
+    return 0;
+}
+
 static int cmd_log(int argc, char **argv)
 {
     if (argc < 2) {
@@ -148,6 +164,7 @@ void console_cmds_start(void)
         {.command = "wifi", .help = "Set Wi-Fi: wifi <ssid> [password] [hostname]", .func = cmd_wifi},
         {.command = "status", .help = "Print live status JSON", .func = cmd_status},
         {.command = "cam", .help = "Camera stats, or: cam <setting> <value> | cam save", .func = cmd_cam},
+        {.command = "auth", .help = "Recovery: auth off (disable password), auth token (show API token)", .func = cmd_auth},
         {.command = "ntp", .help = "Show system time and NTP server reachability", .func = cmd_ntp},
         {.command = "log", .help = "Set log level: log <level> [tag]", .func = cmd_log},
         {.command = "reboot", .help = "Restart the device", .func = cmd_reboot},

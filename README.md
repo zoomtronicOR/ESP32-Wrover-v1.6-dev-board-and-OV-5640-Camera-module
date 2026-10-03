@@ -43,6 +43,10 @@ Wi-Fi se može podesiti i preko serijske konzole: `wifi <ssid> <lozinka>`.
 | GET | `/api/wifi/scan` | Skeniranje mreža |
 | GET/POST | `/api/system` | Informacije o sistemu i lista taskova; POST `{"device_name"}` |
 | POST | `/api/time` | `{"epoch": <unix s>}`: postavlja vreme iz browsera ako NTP ne radi |
+| POST | `/api/login`, `/api/logout` | Prijava (session cookie) / odjava |
+| GET/POST | `/api/security` | Zaštita: lozinka, API token, timeout sesije, lozinka setup AP-a |
+| GET/POST | `/api/ota` | Stanje OTA slotova / upload `firmware.bin` (samo uz uključenu zaštitu) |
+| POST | `/api/ota/rollback` | Povratak na prethodni firmware |
 | POST | `/api/reboot` | Restart |
 | POST | `/api/factory-reset` | `{"wifi": true}` briše i Wi-Fi podešavanja |
 | GET | `/api/telemetry` | Live registri senzora (ekspozicija, gain, AWB…) i telemetrija modula |
@@ -59,7 +63,15 @@ Wi-Fi se može podesiti i preko serijske konzole: `wifi <ssid> <lozinka>`.
 | POST | `/api/events/clear` | Briše događaje |
 | WS | `/ws` | Status svake sekunde i događaji u realnom vremenu |
 
-> Autentifikacija još ne postoji (Faza 8). Kameru drži samo u lokalnoj mreži.
+## Sigurnost
+
+Na **System → Security** postavi korisnika i lozinku i uključi *Password protection*. Posle toga je zaštićeno sve: `/api/*`, `/capture`, stream na portu 81 i WebSocket.
+- **Web UI:** prijava sa sesijom. Cookie je HttpOnly i SameSite=Strict, a sesija ističe posle zadatog vremena neaktivnosti.
+- **Home Assistant i skripte:** API token (`Authorization: Bearer <token>` ili `?token=<token>`), ili HTTP Basic sa korisnikom i lozinkom, npr. u HA „Generic camera“.
+- **Lozinka** se čuva kao PBKDF2-SHA256 sa salt-om. Posle 5 pogrešnih pokušaja prijava se privremeno zaključava.
+- **OTA** (System → Firmware update) radi samo kad je zaštita uključena. Ako novi firmware ne može da se pokrene, kamera se automatski vraća na prethodni.
+- **Zaboravljena lozinka:** serijska komanda `auth off` isključuje zaštitu i briše lozinku (potreban je fizički pristup).
+- Lozinka setup AP-a se menja u istoj kartici.
 
 ## MQTT / Home Assistant
 
@@ -118,5 +130,5 @@ Kamera može da pošalje snapshot događaja (pokret ili AI objekat) vision model
 - [ ] Faza 6: microSD, timelapse, pregled događaja
 - [x] **AI opis događaja** preko vision LLM-a (Ollama / Open WebUI)
 - [x] **Faza 7, eksterni AI:** HTTP AI server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom, HA senzori po klasi, okviri na Live View-u
-- [ ] Faza 8: sigurnost (auth, API tokeni, zaštita OTA, TLS)
+- [x] **Faza 8, sigurnost:** prijava i sesije, API token, HTTP Basic, zaključavanje posle pogrešnih pokušaja, OTA sa zaštitom i rollback-om (HTTPS i MQTT TLS nisu urađeni)
 

@@ -58,5 +58,8 @@ esp_err_t cam_mgr_restore_defaults(void);
 esp_err_t cam_mgr_af_trigger(void);
 // Deinit + init of the camera driver (watchdog action, also exposed via MQTT/HA).
 esp_err_t cam_mgr_restart(void);
+// Stops the camera driver completely (e.g. during OTA: camera DMA/interrupts and long flash
+// writes with the cache disabled trip the interrupt watchdog on the ESP32 + PSRAM). Resume re-inits.
+void cam_mgr_suspend(bool suspend);
 // Driver counters, frame pool usage and live sensor registers (exposure, gain, AWB...).
 cJSON *cam_mgr_telemetry_json(void);
