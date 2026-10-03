@@ -2,6 +2,8 @@
 
 ESP-IDF firmware koji od ESP32-WROVER ploče i OV5640 (5 MP) senzora pravi samostalnu Wi-Fi IP kameru bez cloud-a. Ima web interfejs, REST API, MJPEG stream i WebSocket telemetriju. MQTT/Home Assistant integracija, motion i AI detekcija dolaze u sledećim fazama.
 
+Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](docs/ARHITEKTURA.md)**.
+
 ## Izgled web interfejsa
 
 > Mockup slike: pravi web UI iz firmware-a sa izmišljenim podacima i sintetičkom scenom umesto snimka kamere.
@@ -166,15 +168,128 @@ Kamera može da pošalje snapshot događaja (pokret ili AI objekat) vision model
 
 Šalje se samo jedna slika po događaju, uz cooldown, pa i spori CPU modeli rade.
 
+## Kamera, grejanje i standby
+
+- OV5640 se primetno greje kad neprekidno snima. Hladnjak na modulu je preporučen.
+- Kad niko ne gleda stream ni ne traži slike, senzor posle 10 s prelazi u **standby** (softverski power-down). Pri sledećem zahtevu se budi za ~0,5 s. Ovo se isključuje opcijom *Sensor standby when idle* na Camera tabu.
+- **Detekcija pokreta drži senzor stalno budnim**, jer joj trebaju frame-ovi. Isto važi za lokalnu detekciju osobe i prelazak linije, koji rade na osnovu pokreta.
+- Podrazumevani *Gain ceiling* za OV5640 je 200 (~12,5x). Veća vrednost daje svetliju sliku pri slabom svetlu, ali i više šuma.
+
+## Serijska konzola
+
+USB (CH340), 115200 baud, npr. `pio device monitor`. Prompt je `cam>`.
+
+| Komanda | Opis |
+|---|---|
+| `help` | Spisak komandi |
+| `wifi <ssid> [lozinka] [hostname]` | Podešava Wi-Fi i povezuje se |
+| `status` | Kompletan status u JSON-u |
+| `cam` / `cam <podešavanje> <vrednost>` / `cam save` | Stanje kamere, promena podešavanja (u RAM), snimanje u flash |
+| `ntp` | Vreme, dostupnost NTP servera, DNS i ručni NTP test |
+| `auth reset` | Vraća inicijalne podatke `admin` / `espadmin`, zaštita uključena |
+| `auth off` | Privremeno isključuje zaštitu (lozinka ostaje) |
+| `auth token` | Ispisuje API token |
+| `log <none\|error\|warn\|info\|debug\|verbose> [tag]` | Nivo logovanja |
+| `reboot` | Restart |
+| `factory_reset` / `factory_reset all` | Briše podešavanja (Wi-Fi ostaje) / sve, uključujući Wi-Fi |
+
+## Statusni LED (GPIO 2)
+
+| Šablon | Stanje |
+|---|---|
+| Brzo treptanje | Pokretanje |
+| 0,5 s uključen / 0,5 s isključen | Povezivanje na Wi-Fi |
+| Dvostruki blic | Setup access point je aktivan |
+| Kratak blic na 2 s | Povezan na Wi-Fi |
+| Trostruki blic | Greška (npr. kamera se nije pokrenula) |
+| Ravnomerno treptanje | OTA ažuriranje |
+| **Stalno upaljen** | **Neko gleda stream** (indikator privatnosti, spec §29) |
+
+## Home Assistant: primeri
+
+Uređaj se pojavljuje automatski preko MQTT discovery-ja. Primeri ispod koriste podrazumevano ime uređaja „ESP32 Camera“, pa u HA proveri tačne `entity_id` vrednosti.
+
+**Obaveštenje na telefon sa AI opisom i slikom:**
+
+```yaml
+automation:
+  - alias: "Kamera: obaveštenje sa AI opisom"
+    trigger:
+      - platform: state
+        entity_id: sensor.esp32_camera_last_description
+    condition: "{{ trigger.to_state.state not in ['unknown', 'unavailable', ''] }}"
+    action:
+      - service: notify.mobile_app_telefon
+        data:
+          title: "ESP32 kamera"
+          message: "{{ trigger.to_state.state }}"
+          data:
+            image: /api/camera_proxy/camera.esp32_camera_snapshot
+```
+
+**Osoba ispred kamere noću → svetlo:**
+
+```yaml
+automation:
+  - alias: "Kamera: osoba noću"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.esp32_camera_person_local
+        to: "on"
+    condition:
+      - condition: sun
+        after: sunset
+    action:
+      - service: light.turn_on
+        target:
+          entity_id: light.dvoriste
+```
+
+**Uživo slika u HA (Generic Camera):** *Settings → Devices & services → Add integration → Generic Camera*
+- Still image URL: `http://<ip-kamere>/capture`
+- Stream source: `http://<ip-kamere>:81/stream`
+- Authentication: `basic`, sa korisnikom i lozinkom kamere. Umesto toga može i `?token=<API token>` na kraju URL-ova.
+
+## Poznata ograničenja i rešeni problemi
+
+- **Upis u flash dok kamera radi zaglavi ESP32 rev1 + PSRAM.** Interrupt watchdog resetuje čip, bez core dump-a. Firmware zato zaustavlja kameru tokom OTA upisa i potvrde novog firmware-a.
+- **NTP:** ako ruter ili firewall blokira NTP za kameru, vreme se uzima iz browsera pri otvaranju web UI-ja (status pokazuje izvor: `ntp` ili `browser`).
+- **Lokalna detekcija osobe** daje samo „osoba da/ne“. Za više klasa i okvire koristi se eksterni AI server.
+- **Prelazak linije** prati jedno težište pokreta, pa je najpouzdaniji kad kroz prolaz ide jedna osoba odjednom.
+- **Nisu urađeni:** HTTPS za web UI i MQTT preko TLS-a (kamera je predviđena za lokalnu mrežu).
+- **Ploča nema SD slot.** Pinovi koje WROVER-KIT koristi za SD zauzeti su kamerom (GPIO 4), pa microSD traži SPI na slobodnim pinovima.
+
+## Struktura repozitorijuma
+
+```text
+main/                 firmware (ESP-IDF komponenta)
+  web/index.html      web UI (ugrađen u firmware)
+  models/             TFLite model za detekciju osobe (Apache-2.0)
+  Kconfig.projbuild   pinovi kamere, LED, lozinka setup AP-a (menuconfig)
+tools/ai_server/      referentni YOLO server za eksterni AI
+docs/                 arhitektura i slike interfejsa
+partitions.csv        raspored flash-a (2 × 3 MB OTA, coredump, storage)
+sdkconfig.defaults    ESP-IDF podešavanja
+platformio.ini        PlatformIO projekat (COM port, ploča)
+```
+
 ## Status razvoja
 
-- [x] **Faza 1, kamera:** OV5640 init, PSRAM, JPEG, snapshot, MJPEG stream, watchdog kamere (restart drajvera)
-- [x] **Faza 2, web UI:** Dashboard, Live View, Camera (sva podešavanja senzora), Network, System
-- [x] **Faza 3, MQTT + Home Assistant:** discovery (kamera, dijagnostički senzori, dugmad), telemetrija, komande, Last Will
-- [x] **Faza 4, detekcija pokreta:** razlika frame-ova sa kompenzacijom osvetljenja, do 4 zone, event engine sa snapshot-ima, HA binary senzori
+- [x] **Faza 1, kamera:** OV5640 init, PSRAM, JPEG, snapshot, MJPEG stream, watchdog kamere, standby senzora
+- [x] **Faza 2, web UI:** Dashboard, Live View, Camera, Network, System, telemetrija senzora i modula
+- [x] **Faza 3, MQTT + Home Assistant:** discovery, telemetrija, komande, Last Will
+- [x] **Faza 4, detekcija pokreta:** kompenzacija osvetljenja, do 4 zone, event engine sa snapshot-ima
 - [x] **Faza 5, lokalni AI:** detekcija osobe na ESP32 (TFLite Micro), prelazak linije sa brojanjem IN/OUT
-- [ ] Faza 6: microSD, timelapse, pregled događaja
+- [x] **Faza 7, eksterni AI:** generički ili DeepStack/CodeProject.AI server, praćenje objekata, okviri na Live View-u
 - [x] **AI opis događaja** preko vision LLM-a (Ollama / Open WebUI)
-- [x] **Faza 7, eksterni AI:** HTTP AI server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom, HA senzori po klasi, okviri na Live View-u
-- [x] **Faza 8, sigurnost:** prijava i sesije, API token, HTTP Basic, zaključavanje posle pogrešnih pokušaja, OTA sa zaštitom i rollback-om (HTTPS i MQTT TLS nisu urađeni)
+- [x] **Faza 8, sigurnost:** prijava, API token, HTTP Basic, zaključavanje, zaštićeni OTA sa rollback-om
 
+**Sledeće:**
+- [ ] Tamper alarm: kamera prekrivena ili pomerena (HA senzor)
+- [ ] Statistika po satu za 24 h (pokreti, osobe, objekti, IN/OUT, FPS, RSSI, memorija) i Stats tab sa grafikonima
+- [ ] Faza 6: microSD preko SPI-ja (podrazumevano isključen), timelapse
+
+## Licence
+
+- Model za detekciju osobe (`main/models/`) je iz TensorFlow Lite Micro primera, pod licencom **Apache-2.0**.
+- Komponente `esp32-camera`, `esp-tflite-micro`, `esp-nn`, `esp_jpeg` i `mdns` preuzima ESP-IDF component manager, svaku pod njenom licencom.
