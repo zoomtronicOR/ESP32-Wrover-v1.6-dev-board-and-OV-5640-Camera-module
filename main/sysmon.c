@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_wifi.h"
+#include "event_mgr.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -45,6 +46,7 @@ static void sysmon_task(void *arg)
         size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         if (free_int < LOW_HEAP_WARN_BYTES && !low_heap_logged) {
             ESP_LOGW(TAG, "low internal heap: %u bytes", (unsigned)free_int);
+            event_post(EV_LOW_MEMORY, NULL, free_int, "internal heap", NULL);
             low_heap_logged = true;
         } else if (free_int > LOW_HEAP_WARN_BYTES * 2) {
             low_heap_logged = false;

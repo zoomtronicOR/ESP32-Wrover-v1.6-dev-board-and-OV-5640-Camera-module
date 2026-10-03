@@ -10,6 +10,8 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "event_mgr.h"
+#include "motion_mgr.h"
 #include "mqtt_mgr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -170,12 +172,15 @@ cJSON *web_status_json(void)
     cJSON_AddNumberToObject(c, "frame_bytes", cam.last_len);
     cJSON_AddNumberToObject(c, "stream_clients", s_stream_clients);
 
+    cJSON_AddItemToObject(o, "motion", motion_mgr_state_json());
+
     // Modules from later phases report their state here once implemented.
     cJSON *m = cJSON_AddObjectToObject(o, "modules");
     cJSON_AddStringToObject(m, "mqtt", mqtt_mgr_state());
     cJSON_AddStringToObject(m, "ha", mqtt_mgr_ha_state());
     cJSON_AddStringToObject(m, "sd", "n/a");
     cJSON_AddStringToObject(m, "ai", "off");
+    cJSON_AddStringToObject(m, "motion", motion_mgr_active() ? "active" : "idle");
     cJSON_AddStringToObject(m, "ota", "n/a");
     return o;
 }
@@ -392,6 +397,73 @@ static esp_err_t wifi_scan_get(httpd_req_t *req)
     return send_json(req, wifi_mgr_scan(), NULL);
 }
 
+/* ------------------------------------------------------------------ API: motion/events ---- */
+
+static esp_err_t motion_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "config", motion_mgr_config_json());
+    cJSON_AddItemToObject(o, "state", motion_mgr_state_json());
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t motion_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!cJSON_IsObject(body)) {
+        cJSON_Delete(body);
+        return send_result(req, ESP_ERR_INVALID_ARG, "expected a JSON object");
+    }
+    char err[96] = "";
+    esp_err_t e = motion_mgr_set_config(body, err, sizeof(err));
+    cJSON_Delete(body);
+    return send_result(req, e, err[0] ? err : NULL);
+}
+
+static esp_err_t motion_debug_get(httpd_req_t *req)
+{
+    return send_json(req, motion_mgr_debug_json(), NULL);
+}
+
+static esp_err_t events_get(httpd_req_t *req)
+{
+    char q[32], v[8];
+    int limit = 0;
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK && httpd_query_key_value(q, "limit", v, sizeof(v)) == ESP_OK) {
+        limit = atoi(v);
+    }
+    return send_json(req, event_list_json(limit), NULL);
+}
+
+static esp_err_t events_clear_post(httpd_req_t *req)
+{
+    event_clear();
+    return send_result(req, ESP_OK, NULL);
+}
+
+static esp_err_t event_snapshot_get(httpd_req_t *req)
+{
+    char q[32], v[12];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK || httpd_query_key_value(q, "id", v, sizeof(v)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing id");
+        return ESP_FAIL;
+    }
+    uint8_t *buf;
+    size_t len;
+    if (event_snapshot_copy(strtoul(v, NULL, 10), &buf, &len) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no snapshot for this event");
+        return ESP_FAIL;
+    }
+    char disp[48];
+    snprintf(disp, sizeof(disp), "inline; filename=event_%s.jpg", v);
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+    httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
+    esp_err_t err = httpd_resp_send(req, (const char *)buf, len);
+    free(buf);
+    return err;
+}
+
 /* ------------------------------------------------------------------ WebSocket ------------- */
 
 static esp_err_t ws_handler(httpd_req_t *req)
@@ -440,6 +512,17 @@ static bool ws_has_clients(void)
         }
     }
     return false;
+}
+
+void web_ws_broadcast_json(const cJSON *json)
+{
+    if (!s_api || !ws_has_clients()) {
+        return;
+    }
+    char *txt = cJSON_PrintUnformatted(json);
+    if (txt && httpd_queue_work(s_api, ws_broadcast_work, txt) != ESP_OK) {
+        free(txt);
+    }
 }
 
 static void ws_push_task(void *arg)
@@ -570,6 +653,12 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/mqtt", HTTP_GET, mqtt_get);
     reg(s_api, "/api/mqtt", HTTP_POST, mqtt_post);
     reg(s_api, "/api/mqtt/discovery", HTTP_POST, mqtt_discovery_post);
+    reg(s_api, "/api/motion", HTTP_GET, motion_get);
+    reg(s_api, "/api/motion", HTTP_POST, motion_post);
+    reg(s_api, "/api/motion/debug", HTTP_GET, motion_debug_get);
+    reg(s_api, "/api/events", HTTP_GET, events_get);
+    reg(s_api, "/api/events/clear", HTTP_POST, events_clear_post);
+    reg(s_api, "/api/events/snapshot", HTTP_GET, event_snapshot_get);
     httpd_uri_t ws = {.uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true};
     ESP_ERROR_CHECK(httpd_register_uri_handler(s_api, &ws));
     httpd_register_err_handler(s_api, HTTPD_404_NOT_FOUND, not_found);

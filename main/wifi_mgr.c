@@ -15,6 +15,7 @@
 #include "esp_wifi.h"
 #include "mdns.h"
 #include "sdkconfig.h"
+#include "event_mgr.h"
 #include "status_led.h"
 
 static const char *TAG = "wifi";
@@ -117,6 +118,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         }
         ESP_LOGW(TAG, "disconnected (reason %d), retry in %" PRIu32 " ms", d->reason, s_backoff_ms);
         if (was_connected) {
+            char reason[16];
+            snprintf(reason, sizeof(reason), "reason %d", d->reason);
+            event_post(EV_WIFI_DISCONNECTED, NULL, 0, reason, NULL);
             s_reconnects++;
             esp_timer_stop(s_fallback_timer);
             esp_timer_start_once(s_fallback_timer, AP_FALLBACK_DELAY_US);
@@ -148,6 +152,9 @@ static void on_ip_event(void *arg, esp_event_base_t base, int32_t id, void *data
     esp_timer_stop(s_fallback_timer);
     ESP_LOGI(TAG, "connected, IP " IPSTR ", http://%s.local", IP2STR(&e->ip_info.ip), g_wifi_cfg.hostname);
     status_led_set(LED_WIFI_CONNECTED);
+    char ip[16];
+    snprintf(ip, sizeof(ip), IPSTR, IP2STR(&e->ip_info.ip));
+    event_post(EV_WIFI_CONNECTED, NULL, 0, ip, NULL);
     static bool sntp_started;
     if (!sntp_started) {
         esp_err_t err = esp_netif_sntp_start();

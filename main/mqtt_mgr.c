@@ -10,6 +10,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "event_mgr.h"
+#include "motion_mgr.h"
 #include "mqtt_client.h"
 #include "nvs.h"
 #include "sysmon.h"
@@ -48,11 +50,16 @@ typedef enum {
     CMD_RESTART_CAMERA,
     CMD_CAMERA_SET,
     CMD_RESTART_CLIENT,
+    CMD_STATE,       // data = "leaf\0payload", retain in flag
+    CMD_FRAME,       // frame = referenced camera frame
+    CMD_MOTION_SET,  // data = "ON"/"OFF"
 } cmd_type_t;
 
 typedef struct {
     cmd_type_t type;
-    char *data;  // heap copy for CMD_CAMERA_SET
+    char *data;  // heap copy for CMD_CAMERA_SET / CMD_STATE / CMD_MOTION_SET
+    cam_frame_t *frame;
+    bool flag;
 } cmd_t;
 
 static mqtt_cfg_t s_cfg;
@@ -63,6 +70,7 @@ static bool s_discovery_sent;
 static char s_last_error[64];
 static char s_dev[33];                // device id used in topics and unique_ids
 static char s_topic_base[TOPIC_LEN];  // <base>/<device>
+static bool s_start_pending;          // (re)start the client once Wi-Fi has an IP
 
 /* ------------------------------------------------------------------ config ---------------- */
 
@@ -166,12 +174,19 @@ static void publish_json(const char *leaf, cJSON *json, bool retain)
     }
 }
 
+static bool post_cmd(cmd_t c)
+{
+    if (!s_queue || xQueueSend(s_queue, &c, 0) != pdTRUE) {
+        free(c.data);
+        cam_mgr_frame_release(c.frame);
+        return false;
+    }
+    return true;
+}
+
 static void post(cmd_type_t type, char *data)
 {
-    cmd_t c = {.type = type, .data = data};
-    if (!s_queue || xQueueSend(s_queue, &c, 0) != pdTRUE) {
-        free(data);
-    }
+    post_cmd((cmd_t){.type = type, .data = data});
 }
 
 /* ------------------------------------------------------------------ Home Assistant -------- */
@@ -287,6 +302,42 @@ static void publish_discovery(void)
     add_button("reboot", "Reboot", "reboot", "restart", false);
     add_button("restart_camera", "Restart camera", "restart_camera", "restart", false);
 
+    // Motion (spec §15): overall sensor, enable switch, events counter and one sensor per zone slot.
+    cJSON *mot = entity("motion", "Motion", NULL);
+    topic(t, "motion");
+    cJSON_AddStringToObject(mot, "state_topic", t);
+    cJSON_AddStringToObject(mot, "device_class", "motion");
+    announce("binary_sensor", "motion", mot);
+
+    cJSON *sw = entity("motion_detection", "Motion detection", "config");
+    topic(t, "motion/set");
+    cJSON_AddStringToObject(sw, "command_topic", t);
+    topic(t, "telemetry");
+    cJSON_AddStringToObject(sw, "state_topic", t);
+    cJSON_AddStringToObject(sw, "value_template", "{{ 'ON' if value_json.motion_enabled else 'OFF' }}");
+    cJSON_AddStringToObject(sw, "icon", "mdi:motion-sensor");
+    announce("switch", "motion_detection", sw);
+
+    add_sensor("motion_events_today", "Motion events today", "{{ value_json.motion_events_today }}", NULL, NULL, false);
+
+    for (int i = 0; i < MOTION_MAX_ZONES; i++) {
+        char object[16], name[24], label[40], tt[TOPIC_LEN];
+        snprintf(object, sizeof(object), "motion_zone%d", i + 1);
+        if (!motion_mgr_zone(i, name, sizeof(name))) {
+            // Unused slot: an empty retained config removes a previously announced entity.
+            snprintf(tt, sizeof(tt), "%s/binary_sensor/%s/%s/config", s_cfg.disc_prefix, s_dev, object);
+            esp_mqtt_client_publish(s_client, tt, "", 0, 1, true);
+            continue;
+        }
+        snprintf(label, sizeof(label), "Motion %s", name);
+        cJSON *z = entity(object, label, NULL);
+        snprintf(tt, sizeof(tt), "motion/zone%d", i + 1);
+        topic(t, tt);
+        cJSON_AddStringToObject(z, "state_topic", t);
+        cJSON_AddStringToObject(z, "device_class", "motion");
+        announce("binary_sensor", object, z);
+    }
+
     s_discovery_sent = true;
     ESP_LOGI(TAG, "Home Assistant discovery published (%s/+/%s/...)", s_cfg.disc_prefix, s_dev);
 }
@@ -315,6 +366,11 @@ static void publish_telemetry(void)
     cJSON_AddNumberToObject(o, "stream_clients", cam.consumers);
     cJSON_AddNumberToObject(o, "frames", cam.frames);
     cJSON_AddNumberToObject(o, "errors", cam.errors);
+    cJSON_AddBoolToObject(o, "motion", motion_mgr_active());
+    cJSON *ms = motion_mgr_state_json();
+    cJSON_AddBoolToObject(o, "motion_enabled", cJSON_IsTrue(cJSON_GetObjectItem(ms, "enabled")));
+    cJSON_Delete(ms);
+    cJSON_AddNumberToObject(o, "motion_events_today", event_count_today(EV_MOTION_START));
     char url[48];
     snprintf(url, sizeof(url), "http://%s:81/stream", w.ip);
     cJSON_AddStringToObject(o, "stream_url", url);
@@ -324,6 +380,16 @@ static void publish_telemetry(void)
     cJSON_Delete(o);
 }
 
+static void publish_frame(cam_frame_t *f)
+{
+    char t[TOPIC_LEN];
+    topic(t, "snapshot");
+    // Retained so the HA camera entity shows the last image after a restart.
+    int id = esp_mqtt_client_publish(s_client, t, (const char *)f->buf, f->len, 0, true);
+    ESP_LOGI(TAG, "snapshot published (%u bytes, %s)", (unsigned)f->len, id >= 0 ? "ok" : "failed");
+    cam_mgr_frame_release(f);
+}
+
 static void publish_snapshot(void)
 {
     cam_frame_t *f = cam_mgr_snapshot(pdMS_TO_TICKS(5000));
@@ -331,12 +397,31 @@ static void publish_snapshot(void)
         ESP_LOGW(TAG, "snapshot: camera did not deliver a frame");
         return;
     }
-    char t[TOPIC_LEN];
-    topic(t, "snapshot");
-    // Retained so the HA camera entity shows the last image after a restart.
-    int id = esp_mqtt_client_publish(s_client, t, (const char *)f->buf, f->len, 0, true);
-    ESP_LOGI(TAG, "snapshot published (%u bytes, %s)", (unsigned)f->len, id >= 0 ? "ok" : "failed");
-    cam_mgr_frame_release(f);
+    publish_frame(f);
+}
+
+void mqtt_mgr_publish_state(const char *leaf, const char *payload, bool retain)
+{
+    if (strcmp(s_state, "ok") != 0) {
+        return;
+    }
+    size_t ll = strlen(leaf), pl = strlen(payload);
+    char *d = malloc(ll + pl + 2);
+    if (!d) {
+        return;
+    }
+    memcpy(d, leaf, ll + 1);
+    memcpy(d + ll + 1, payload, pl + 1);
+    post_cmd((cmd_t){.type = CMD_STATE, .data = d, .flag = retain});
+}
+
+void mqtt_mgr_publish_snapshot(cam_frame_t *f)
+{
+    if (strcmp(s_state, "ok") != 0 || !f) {
+        return;
+    }
+    cam_mgr_frame_ref(f);
+    post_cmd((cmd_t){.type = CMD_FRAME, .frame = f});
 }
 
 esp_err_t mqtt_mgr_publish_event(cJSON *event)
@@ -365,15 +450,19 @@ static void handle_message(esp_mqtt_event_handle_t ev)
         return;
     }
 
-    char cmd_t[TOPIC_LEN], set_t[TOPIC_LEN], ha_t[TOPIC_LEN];
+    char cmd_t[TOPIC_LEN], set_t[TOPIC_LEN], ha_t[TOPIC_LEN], mot_t[TOPIC_LEN];
     topic(cmd_t, "command");
     topic(set_t, "camera/set");
+    topic(mot_t, "motion/set");
     snprintf(ha_t, sizeof(ha_t), "%s/status", s_cfg.disc_prefix);
 
     if (strcmp(t, ha_t) == 0) {
         if (strcmp(data, "online") == 0 && s_cfg.discovery) {
             post(CMD_DISCOVERY, NULL);  // HA restarted: re-announce entities
         }
+    } else if (strcmp(t, mot_t) == 0) {
+        post(CMD_MOTION_SET, data);
+        return;
     } else if (strcmp(t, set_t) == 0) {
         post(CMD_CAMERA_SET, data);
         return;
@@ -403,11 +492,13 @@ static void on_mqtt_event(void *arg, esp_event_base_t base, int32_t id, void *da
         s_state = "ok";
         s_last_error[0] = 0;
         ESP_LOGI(TAG, "connected to %s:%u", s_cfg.host, s_cfg.port);
+        event_post(EV_MQTT_CONNECTED, NULL, 0, s_cfg.host, NULL);
         post(CMD_CONNECTED, NULL);
         break;
     case MQTT_EVENT_DISCONNECTED:
         if (strcmp(s_state, "ok") == 0) {
             ESP_LOGW(TAG, "disconnected");
+            event_post(EV_MQTT_DISCONNECTED, NULL, 0, s_cfg.host, NULL);
         }
         s_state = "error";
         s_discovery_sent = false;
@@ -490,6 +581,10 @@ static void on_connected(void)
     esp_mqtt_client_subscribe(s_client, t, 1);
     topic(t, "camera/set");
     esp_mqtt_client_subscribe(s_client, t, 1);
+    topic(t, "motion/set");
+    esp_mqtt_client_subscribe(s_client, t, 1);
+    topic(t, "motion");
+    esp_mqtt_client_publish(s_client, t, motion_mgr_active() ? "ON" : "OFF", 0, s_cfg.qos, true);
     if (s_cfg.discovery) {
         snprintf(t, sizeof(t), "%s/status", s_cfg.disc_prefix);
         esp_mqtt_client_subscribe(s_client, t, 1);
@@ -526,8 +621,32 @@ static void worker_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(500));
                 esp_restart();
                 break;
+            case CMD_STATE:
+                if (up) {
+                    char t[TOPIC_LEN];
+                    topic(t, c.data);
+                    esp_mqtt_client_publish(s_client, t, c.data + strlen(c.data) + 1, 0, s_cfg.qos, c.flag);
+                }
+                break;
+            case CMD_FRAME:
+                if (up) {
+                    publish_frame(c.frame);  // releases the frame
+                } else {
+                    cam_mgr_frame_release(c.frame);
+                }
+                c.frame = NULL;
+                break;
+            case CMD_MOTION_SET: {
+                cJSON *j = cJSON_CreateObject();
+                cJSON_AddBoolToObject(j, "enabled", strcmp(c.data, "ON") == 0);
+                char err[64];
+                motion_mgr_set_config(j, err, sizeof(err));
+                cJSON_Delete(j);
+                publish_telemetry();
+                break;
+            }
             case CMD_RESTART_CLIENT:
-                client_start();
+                s_start_pending = true;
                 break;
             case CMD_RESTART_CAMERA:
                 cam_mgr_restart();
@@ -545,6 +664,15 @@ static void worker_task(void *arg)
             }
             }
             free(c.data);
+            cam_mgr_frame_release(c.frame);
+        }
+        if (s_start_pending) {
+            wifi_status_t w;
+            wifi_mgr_get_status(&w);
+            if (w.sta_connected) {
+                s_start_pending = false;
+                client_start();
+            }
         }
         if (!s_client || strcmp(s_state, "ok") != 0) {
             continue;

@@ -46,6 +46,8 @@ cam_frame_t *cam_mgr_frame_wait(uint32_t last_seq, TickType_t timeout);
 // Returns a fresh frame regardless of whether anyone is streaming.
 cam_frame_t *cam_mgr_snapshot(TickType_t timeout);
 void cam_mgr_frame_release(cam_frame_t *f);
+// Takes an extra reference on a frame the caller already holds (to hand it to another task).
+void cam_mgr_frame_ref(cam_frame_t *f);
 
 // Settings: Apply -> RAM, Save -> NVS (spec §52).
 cJSON *cam_mgr_settings_to_json(void);

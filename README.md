@@ -48,7 +48,12 @@ Wi-Fi se može podesiti i preko serijske konzole: `wifi <ssid> <lozinka>`.
 | GET | `/api/telemetry` | Live registri senzora (ekspozicija, gain, AWB…) i telemetrija modula |
 | GET/POST | `/api/mqtt` | MQTT/HA podešavanja |
 | POST | `/api/mqtt/discovery` | Ponovo šalje HA discovery |
-| WS | `/ws` | Status svake sekunde |
+| GET/POST | `/api/motion` | Podešavanja i stanje detekcije pokreta, zone |
+| GET | `/api/motion/debug` | Mreža razlika (heatmap) za podešavanje osetljivosti |
+| GET | `/api/events` | Dnevnik događaja (`?limit=N`) |
+| GET | `/api/events/snapshot?id=N` | Snapshot događaja |
+| POST | `/api/events/clear` | Briše događaje |
+| WS | `/ws` | Status svake sekunde i događaji u realnom vremenu |
 
 > Autentifikacija još ne postoji (Faza 8). Kameru drži samo u lokalnoj mreži.
 
@@ -63,16 +68,28 @@ Podešava se na tabu **MQTT / HA**. Topici imaju oblik `camera/<device>/…`, gd
 | `snapshot` | JPEG slika za HA MQTT camera entitet (retained) |
 | `event` | JSON događaji (motion/AI u sledećim fazama) |
 | `command` | `snapshot`, `reboot`, `restart_camera` |
+| `motion`, `motion/zoneN` | `ON` / `OFF` (retained) |
+| `motion/set` | `ON` / `OFF`: uključuje ili isključuje detekciju pokreta |
 | `camera/set` | JSON podešavanja kamere, npr. `{"vflip":1,"quality":10}` |
 
 Kad je discovery uključen, HA automatski dobija uređaj sa kamerom (snapshot), dijagnostičkim senzorima i dugmadima. Ponovo ga šalje kad se HA restartuje (`homeassistant/status`).
+
+## Detekcija pokreta
+
+Tab **Motion**: zone se crtaju prevlačenjem preko slike. Heatmap prikazuje šta senzor vidi kao promenu.
+- *Sensitivity*: koliko se pojedinačna ćelija mora promeniti.
+- *Minimum area*: koji deo zone se mora promeniti.
+- *Trigger frames*: koliko frame-ova zaredom.
+- *Cooldown*: koliko mirnih sekundi pre nego što pokret završi.
+
+Nagla promena većine slike, npr. kad se upali svetlo, ne pokreće alarm. Dok je detekcija uključena, senzor ne ide u standby.
 
 ## Status razvoja
 
 - [x] **Faza 1, kamera:** OV5640 init, PSRAM, JPEG, snapshot, MJPEG stream, watchdog kamere (restart drajvera)
 - [x] **Faza 2, web UI:** Dashboard, Live View, Camera (sva podešavanja senzora), Network, System
 - [x] **Faza 3, MQTT + Home Assistant:** discovery (kamera, dijagnostički senzori, dugmad), telemetrija, komande, Last Will
-- [ ] Faza 4: motion detection, zone, event engine
+- [x] **Faza 4, detekcija pokreta:** razlika frame-ova sa kompenzacijom osvetljenja, do 4 zone, event engine sa snapshot-ima, HA binary senzori
 - [ ] Faza 5: lokalni AI (ESP-DL)
 - [ ] Faza 6: microSD, timelapse, pregled događaja
 - [ ] Faza 7: eksterni AI / Frigate

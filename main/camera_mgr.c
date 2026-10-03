@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "event_mgr.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -266,8 +267,8 @@ static void adapt_to_sensor(sensor_t *s)
         s_type[P_GAINCEILING] = PT_RANGE;
         s_min[P_GAINCEILING] = 16;
         s_max[P_GAINCEILING] = 1023;
-        // The sensor's power-on ceiling (~15x) leaves indoor scenes very dark; use the full range.
-        s_def[P_GAINCEILING] = 1023;
+        // Default chosen on this installation (user preference): ~12.5x, less noise than the full range.
+        s_def[P_GAINCEILING] = 200;
     }
     for (int i = 0; i < P_COUNT; i++) {
         s_val[i] = clamp_param(i, s_val[i]);
@@ -418,6 +419,7 @@ static esp_err_t driver_restart(const char *reason)
     }
     s_restarts++;
     s_standby = false;
+    event_post(EV_CAMERA_RESTART, NULL, s_restarts, reason, NULL);
     s_ok = (driver_start() == ESP_OK);
     return s_ok ? ESP_OK : ESP_FAIL;
 }
@@ -506,6 +508,13 @@ void cam_mgr_frame_release(cam_frame_t *f)
     }
     xSemaphoreTake(s_hub_lock, portMAX_DELAY);
     f->refs--;
+    xSemaphoreGive(s_hub_lock);
+}
+
+void cam_mgr_frame_ref(cam_frame_t *f)
+{
+    xSemaphoreTake(s_hub_lock, portMAX_DELAY);
+    f->refs++;
     xSemaphoreGive(s_hub_lock);
 }
 

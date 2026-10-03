@@ -6,6 +6,8 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
+#include "event_mgr.h"
+#include "motion_mgr.h"
 #include "mqtt_mgr.h"
 #include "status_led.h"
 #include "sysmon.h"
@@ -23,6 +25,8 @@ void app_main(void)
     ESP_ERROR_CHECK(app_config_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    event_mgr_init();
+    event_post(EV_BOOT, NULL, g_diag.boot_count, sysmon_reset_reason(), NULL);
 
     // Camera first: it needs large contiguous PSRAM/DMA buffers before Wi-Fi fragments the heap.
     if (cam_mgr_init() != ESP_OK) {
@@ -32,6 +36,7 @@ void app_main(void)
     sysmon_init();
     wifi_mgr_init();
     mqtt_mgr_init();
+    motion_mgr_init();
     web_server_start();
     console_cmds_start();
 
