@@ -700,7 +700,8 @@ function onDescription(d) {
 }
 
 /* ---------- security / login / OTA ---------- */
-function showLogin() { $('login').style.display = 'flex'; $('lg_user').focus(); }
+// Shown once; later 401s (background refreshes) must not move the focus while the user types.
+function showLogin() { if ($('login').style.display === 'flex') return; $('login').style.display = 'flex'; $('lg_user').focus(); }
 $('loginform').onsubmit = async e => {
   e.preventDefault(); $('lg_msg').textContent = '';
   try { await api('/api/login', { user: $('lg_user').value, password: $('lg_pass').value }); location.reload(); }
@@ -881,12 +882,12 @@ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); 
 
 (async () => {
   const ses = await fetch('/api/session').then(r => r.json()).catch(() => ({ authorized: true }));
-  if (!ses.authorized) { showLogin(); return; }
+  if (!ses.authorized) { showLogin(); return; }  // no tab loads or refresh timers until signed in
   pollStatus();
   connectWS();
+  let start = 'dash'; try { start = localStorage.getItem('tab') || 'dash'; } catch (e) {}
+  showTab(document.getElementById(start) ? start : 'dash');
 })();
-let start = 'dash'; try { start = localStorage.getItem('tab') || 'dash'; } catch (e) {}
-showTab(document.getElementById(start) ? start : 'dash');
 </script>
 </body>
 </html>
