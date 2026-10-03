@@ -27,14 +27,14 @@ ESP-IDF 5.3.2 se instalira automatski kroz PlatformIO (pioarduino platforma). Ko
 
 Wi-Fi se može podesiti i preko serijske konzole: `wifi <ssid> <lozinka>`.
 
-### Fabrički podaci za prijavu
+### Inicijalni podaci za prijavu
 
 | | |
 |---|---|
 | Korisnik | **`admin`** |
 | Lozinka | **`espadmin`** |
 
-Zaštita je uključena od prvog pokretanja. Dok je fabrička lozinka aktivna, web UI prikazuje upozorenje. **Promeni je odmah** na System → Security, jer je javno dokumentovana. Fabrički podaci se vraćaju posle factory reset-a i serijskom komandom `auth reset`.
+Zaštita je uključena od prvog pokretanja. Dok je inicijalna lozinka aktivna, web UI prikazuje upozorenje. **Promeni je odmah** na System → Security, jer je javno dokumentovana. Inicijalni podaci se vraćaju posle factory reset-a i serijskom komandom `auth reset`.
 
 ## Endpointi
 
@@ -74,7 +74,7 @@ Zaštita je uključena od prvog pokretanja. Dok je fabrička lozinka aktivna, we
 
 ## Sigurnost
 
-Zaštita je uključena od prvog pokretanja, sa fabričkim podacima `admin` / `espadmin` (vidi gore). Korisnik i lozinka se menjaju na **System → Security**. Zaštićeno je sve: `/api/*`, `/capture`, stream na portu 81 i WebSocket.
+Zaštita je uključena od prvog pokretanja, sa inicijalnim podacima `admin` / `espadmin` (vidi gore). Korisnik i lozinka se menjaju na **System → Security**. Zaštićeno je sve: `/api/*`, `/capture`, stream na portu 81 i WebSocket.
 - **Web UI:** prijava sa sesijom. Cookie je HttpOnly i SameSite=Strict, a sesija ističe posle zadatog vremena neaktivnosti.
 - **Home Assistant i skripte:** API token (`Authorization: Bearer <token>` ili `?token=<token>`), ili HTTP Basic sa korisnikom i lozinkom, npr. u HA „Generic camera“.
 - **Lozinka** se čuva kao PBKDF2-SHA256 sa salt-om. Posle 5 pogrešnih pokušaja prijava se privremeno zaključava.
