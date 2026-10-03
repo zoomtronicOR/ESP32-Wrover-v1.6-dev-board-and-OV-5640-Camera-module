@@ -9,6 +9,10 @@
 // authorised by any of: session cookie "sid" (web UI), "Authorization: Bearer <token>" or
 // "?token=<token>" (API token for Home Assistant / scripts), or HTTP Basic with the user's
 // credentials (HA generic camera). Passwords are stored as PBKDF2-HMAC-SHA256 with a salt.
+// Factory default (first boot, factory reset, `auth reset`): AUTH_DEFAULT_USER / AUTH_DEFAULT_PASS
+// with protection ON; the UI warns until the default password is changed.
+#define AUTH_DEFAULT_USER "admin"
+#define AUTH_DEFAULT_PASS "espadmin"
 #define AUTH_SID_LEN   32
 #define AUTH_TOKEN_LEN 32
 
@@ -27,8 +31,12 @@ bool auth_basic_valid(const char *user, const char *pass);
 cJSON *auth_config_json(void);
 // {"enabled","user","password","current_password","session_min","regenerate_token","ap_password"}
 esp_err_t auth_set_config(const cJSON *cfg, char *err, size_t err_len);
-// Physical-access recovery (serial console): disables authentication and erases the password.
+// Serial-console recovery: disable protection (password kept) ...
 void auth_disable(void);
+// ... or restore the factory credentials with protection on.
+void auth_reset_defaults(void);
+// True while the factory default password is still in use.
+bool auth_default_password(void);
 const char *auth_token(void);
 // Password of the setup access point (NVS override of CONFIG_SETUP_AP_PASSWORD).
 const char *auth_ap_password(void);

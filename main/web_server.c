@@ -190,6 +190,7 @@ cJSON *web_status_json(void)
     cJSON_AddStringToObject(m, "motion", motion_mgr_active() ? "active" : "idle");
     cJSON_AddStringToObject(m, "ota", "ok");
     cJSON_AddBoolToObject(o, "auth_enabled", auth_mgr_enabled());
+    cJSON_AddBoolToObject(o, "default_password", auth_mgr_enabled() && auth_default_password());
     return o;
 }
 

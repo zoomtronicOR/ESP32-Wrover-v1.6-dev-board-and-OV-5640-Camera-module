@@ -83,8 +83,8 @@ progress{width:100%;height:14px}
   <h1 id="devname">ESP32 Camera</h1>
   <div class="pills" id="pills"></div>
 </header>
-<div id="authwarn">⚠ No password is set: anyone on your network can view and control this camera. <a href="#" id="authwarnlink">Set a password</a></div>
-<div id="login"><form class="card" id="loginform"><h2>ESP32 Camera — sign in</h2><input type="text" id="lg_user" placeholder="User" autocomplete="username" required><input type="password" id="lg_pass" placeholder="Password" autocomplete="current-password" required><button class="b" type="submit" style="width:100%">Sign in</button><p class="muted" id="lg_msg"></p></form></div>
+<div id="authwarn"><span id="authwarntext"></span> <a href="#" id="authwarnlink">Change it</a></div>
+<div id="login"><form class="card" id="loginform"><h2>ESP32 Camera</h2><input type="text" id="lg_user" placeholder="User" autocomplete="username" required><input type="password" id="lg_pass" placeholder="Password" autocomplete="current-password" required><button class="b" type="submit" style="width:100%">Sign in</button><p class="muted" id="lg_msg"></p></form></div>
 <nav id="nav">
   <button data-tab="dash" class="active">Dashboard</button>
   <button data-tab="live">Live View</button>
@@ -372,7 +372,9 @@ $('nav').onclick = e => { if (e.target.dataset.tab) showTab(e.target.dataset.tab
 function pill(name, state, title) { return `<span class="pill" title="${esc(title || '')}"><span class="dot ${state}"></span>${name}</span>`; }
 function renderStatus(s) {
   status = s;
-  $('authwarn').style.display = s.auth_enabled ? 'none' : 'block';
+  $('authwarn').style.display = !s.auth_enabled || s.default_password ? 'block' : 'none';
+  $('authwarntext').textContent = !s.auth_enabled ? '⚠ Password protection is off: anyone on your network can view and control this camera.'
+    : '⚠ The factory password (admin / espadmin) is still in use. Anyone who knows it can log in.';
   // NTP blocked or not yet synced: hand the device the browser clock (spec §55 fallback).
   if (!s.time && !renderStatus.sentTime) { renderStatus.sentTime = true; api('/api/time', { epoch: Math.floor(Date.now() / 1000) }).catch(() => {}); }
   $('devname').textContent = s.device;
@@ -710,7 +712,7 @@ async function loadSecurity() {
   try {
     const c = await api('/api/security');
     $('sec_enabled').checked = c.enabled; $('sec_user').value = c.user; $('sec_session_min').value = c.session_min;
-    $('sec_state').textContent = c.enabled ? 'ON' : (c.has_password ? 'OFF (password stored)' : 'OFF — no password set');
+    $('sec_state').textContent = (c.enabled ? 'ON' : 'OFF') + (c.default_password ? ' — factory password admin / espadmin' : '');
     $('sec_ap').placeholder = c.custom_ap_password ? 'unchanged (custom)' : 'default';
     secToken = c.token; $('sec_token').textContent = '••••••••';
   } catch (e) {}

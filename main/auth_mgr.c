@@ -33,6 +33,7 @@ static char s_user[33] = "admin";
 static uint8_t s_salt[SALT_LEN];
 static uint8_t s_hash[HASH_LEN];
 static bool s_has_password;
+static bool s_default_pw;  // factory password still active
 static char s_token[AUTH_TOKEN_LEN + 1];
 static uint16_t s_session_min = 60;
 static char s_ap_pass[64];
@@ -145,9 +146,19 @@ esp_err_t auth_mgr_init(void)
         random_hex(s_token, AUTH_TOKEN_LEN);
         save();
     }
-    if (s_enabled && !s_has_password) {
-        s_enabled = false;  // never lock the user out with an unusable configuration
+    if (!s_has_password) {
+        // First boot or factory reset: documented default credentials, protection on.
+        strlcpy(s_user, AUTH_DEFAULT_USER, sizeof(s_user));
+        esp_fill_random(s_salt, SALT_LEN);
+        derive(AUTH_DEFAULT_PASS, s_salt, s_hash);
+        s_has_password = true;
+        s_enabled = true;
+        save();
+        ESP_LOGW(TAG, "factory credentials set: %s / %s - change them in System > Security", AUTH_DEFAULT_USER, AUTH_DEFAULT_PASS);
     }
+    uint8_t dh[HASH_LEN];
+    derive(AUTH_DEFAULT_PASS, s_salt, dh);
+    s_default_pw = ct_equal(dh, s_hash, HASH_LEN);
     if (s_enabled) {
         ESP_LOGI(TAG, "authentication enabled (user '%s')", s_user);
     } else {
@@ -242,6 +253,7 @@ cJSON *auth_config_json(void)
     cJSON_AddBoolToObject(o, "enabled", s_enabled);
     cJSON_AddStringToObject(o, "user", s_user);
     cJSON_AddBoolToObject(o, "has_password", s_has_password);
+    cJSON_AddBoolToObject(o, "default_password", s_default_pw);
     cJSON_AddNumberToObject(o, "session_min", s_session_min);
     cJSON_AddStringToObject(o, "token", s_token);
     cJSON_AddBoolToObject(o, "custom_ap_password", s_ap_pass[0] != 0);
@@ -305,6 +317,7 @@ esp_err_t auth_set_config(const cJSON *cfg, char *err, size_t err_len)
         esp_fill_random(s_salt, SALT_LEN);
         derive(pass, s_salt, s_hash);
         s_has_password = true;
+        s_default_pw = strcmp(pass, AUTH_DEFAULT_PASS) == 0;
     }
     if (changes_credentials) {
         clear_sessions();  // everyone logs in again with the new credentials
@@ -334,16 +347,35 @@ out:
 void auth_disable(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    // Physical-access recovery for a forgotten password: protection off and password erased.
     s_enabled = false;
-    s_has_password = false;
-    memset(s_hash, 0, sizeof(s_hash));
     s_fails = 0;
     s_locked_until_us = 0;
     clear_sessions();
     save();
     xSemaphoreGive(s_lock);
-    ESP_LOGW(TAG, "authentication disabled and password erased from the serial console");
+    ESP_LOGW(TAG, "authentication disabled from the serial console");
+}
+
+void auth_reset_defaults(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(s_user, AUTH_DEFAULT_USER, sizeof(s_user));
+    esp_fill_random(s_salt, SALT_LEN);
+    derive(AUTH_DEFAULT_PASS, s_salt, s_hash);
+    s_has_password = true;
+    s_default_pw = true;
+    s_enabled = true;
+    s_fails = 0;
+    s_locked_until_us = 0;
+    clear_sessions();
+    save();
+    xSemaphoreGive(s_lock);
+    ESP_LOGW(TAG, "credentials reset to %s / %s from the serial console", AUTH_DEFAULT_USER, AUTH_DEFAULT_PASS);
+}
+
+bool auth_default_password(void)
+{
+    return s_default_pw;
 }
 
 const char *auth_token(void)

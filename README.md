@@ -27,6 +27,15 @@ ESP-IDF 5.3.2 se instalira automatski kroz PlatformIO (pioarduino platforma). Ko
 
 Wi-Fi se može podesiti i preko serijske konzole: `wifi <ssid> <lozinka>`.
 
+### Fabrički podaci za prijavu
+
+| | |
+|---|---|
+| Korisnik | **`admin`** |
+| Lozinka | **`espadmin`** |
+
+Zaštita je uključena od prvog pokretanja. Dok je fabrička lozinka aktivna, web UI prikazuje upozorenje. **Promeni je odmah** na System → Security, jer je javno dokumentovana. Fabrički podaci se vraćaju posle factory reset-a i serijskom komandom `auth reset`.
+
 ## Endpointi
 
 | Metod | Putanja | Opis |
@@ -65,12 +74,15 @@ Wi-Fi se može podesiti i preko serijske konzole: `wifi <ssid> <lozinka>`.
 
 ## Sigurnost
 
-Na **System → Security** postavi korisnika i lozinku i uključi *Password protection*. Posle toga je zaštićeno sve: `/api/*`, `/capture`, stream na portu 81 i WebSocket.
+Zaštita je uključena od prvog pokretanja, sa fabričkim podacima `admin` / `espadmin` (vidi gore). Korisnik i lozinka se menjaju na **System → Security**. Zaštićeno je sve: `/api/*`, `/capture`, stream na portu 81 i WebSocket.
 - **Web UI:** prijava sa sesijom. Cookie je HttpOnly i SameSite=Strict, a sesija ističe posle zadatog vremena neaktivnosti.
 - **Home Assistant i skripte:** API token (`Authorization: Bearer <token>` ili `?token=<token>`), ili HTTP Basic sa korisnikom i lozinkom, npr. u HA „Generic camera“.
 - **Lozinka** se čuva kao PBKDF2-SHA256 sa salt-om. Posle 5 pogrešnih pokušaja prijava se privremeno zaključava.
 - **OTA** (System → Firmware update) radi samo kad je zaštita uključena. Ako novi firmware ne može da se pokrene, kamera se automatski vraća na prethodni.
-- **Zaboravljena lozinka:** serijska komanda `auth off` isključuje zaštitu i briše lozinku (potreban je fizički pristup).
+- **Zaboravljena lozinka** (potreban je fizički pristup, USB):
+  - serijska komanda `auth reset` vraća `admin` / `espadmin` sa uključenom zaštitom;
+  - `auth off` privremeno isključuje zaštitu, a lozinka ostaje sačuvana;
+  - `auth token` ispisuje API token.
 - Lozinka setup AP-a se menja u istoj kartici.
 
 ## MQTT / Home Assistant
