@@ -2,6 +2,18 @@
 
 ESP-IDF firmware koji od ESP32-WROVER ploče i OV5640 (5 MP) senzora pravi samostalnu Wi-Fi IP kameru bez cloud-a. Ima web interfejs, REST API, MJPEG stream i WebSocket telemetriju. MQTT/Home Assistant integracija, motion i AI detekcija dolaze u sledećim fazama.
 
+## Izgled web interfejsa
+
+> Mockup slike: pravi web UI iz firmware-a sa izmišljenim podacima i sintetičkom scenom umesto snimka kamere.
+
+| | |
+|---|---|
+| ![Dashboard](docs/screenshots/01-dashboard.jpg) **Dashboard**: pregled, FPS, Wi-Fi, memorija, CPU | ![Live View](docs/screenshots/02-live-view.jpg) **Live View**: MJPEG stream, zone pokreta, AI okviri, overlay |
+| ![Camera](docs/screenshots/03-camera.jpg) **Camera**: sva podešavanja OV5640 senzora | ![Motion](docs/screenshots/04-motion.jpg) **Motion**: crtanje zona, heatmap razlika, stanje |
+| ![AI](docs/screenshots/05-ai.jpg) **AI**: eksterni AI server, praćenje objekata, test detekcije | ![Events](docs/screenshots/06-events.jpg) **Events**: događaji sa snapshot-ima i AI opisima |
+| ![MQTT / HA](docs/screenshots/07-mqtt-ha.jpg) **MQTT / HA**: broker i Home Assistant discovery | ![System](docs/screenshots/08-system.jpg) **System**: sigurnost, API token, OTA, telemetrija |
+| ![Login](docs/screenshots/09-login.jpg) **Prijava** | |
+
 ## Hardver
 
 - ESP32-D0WDQ6 (rev 1), 8 MB flash, 4 MB PSRAM, USB-serijski konvertor CH340
