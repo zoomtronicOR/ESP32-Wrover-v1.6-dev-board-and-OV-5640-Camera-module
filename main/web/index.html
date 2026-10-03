@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 Camera</title>
+<style>
+:root{--bg:#f4f5f7;--panel:#fff;--text:#1d2129;--muted:#6b7280;--line:#e3e5e8;--accent:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--off:#9ca3af}
+@media (prefers-color-scheme:dark){:root{--bg:#111318;--panel:#1a1d24;--text:#e6e8eb;--muted:#9aa1ad;--line:#2a2e37;--accent:#4f8cff;--off:#5b6170}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header h1{font-size:16px;margin:0;font-weight:600}
+.pills{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:2px 8px;border:1px solid var(--line);border-radius:99px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--off)}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+nav{display:flex;gap:2px;overflow-x:auto;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+nav button{background:none;border:0;border-bottom:2px solid transparent;padding:10px 12px;color:var(--muted);font:inherit;cursor:pointer;white-space:nowrap}
+nav button.active{color:var(--text);border-color:var(--accent)}
+main{max-width:1100px;margin:0 auto;padding:16px}
+section{display:none}section.active{display:block}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px}
+.card h2{font-size:14px;margin:0 0 10px;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.metric{background:var(--bg);border-radius:6px;padding:8px 10px}
+.metric .k{font-size:12px;color:var(--muted)}.metric .v{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.cols{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:14px}
+@media (max-width:800px){.cols{grid-template-columns:1fr}}
+.viewer{position:relative;background:#000;border-radius:6px;overflow:hidden;aspect-ratio:4/3;max-height:72vh;max-width:calc(72vh * 4 / 3);margin:0 auto;display:flex;align-items:center;justify-content:center}
+.viewer img{width:100%;height:100%;object-fit:contain;transform-origin:center;transition:transform .1s}
+.viewer .ovl{position:absolute;left:8px;bottom:8px;right:8px;display:flex;justify-content:space-between;color:#fff;font:12px ui-monospace,monospace;text-shadow:0 0 3px #000;pointer-events:none}
+.viewer .msg{position:absolute;color:#aaa}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+button.b,a.b{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:7px 12px;font:inherit;cursor:pointer;text-decoration:none}
+button.b.sec{background:transparent;color:var(--text);border:1px solid var(--line)}
+button.b.danger{background:var(--bad)}
+button.b:disabled{opacity:.5;cursor:default}
+select,input[type=text],input[type=password],input[type=number]{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit}
+.row{display:grid;grid-template-columns:minmax(120px,190px) minmax(0,1fr) 64px 28px;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row label{color:var(--muted)}
+.row input[type=range]{width:100%}
+.row input[type=number]{width:64px;padding:4px}
+.row .rst{background:none;border:0;color:var(--muted);cursor:pointer;font-size:15px}
+.row.changed label{color:var(--accent)}
+.tag{font-size:11px;color:var(--warn);margin-left:4px}
+form.f{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px 10px;align-items:center;max-width:520px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:500}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:8px 14px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw}
+#toast.show{opacity:1}
+.scan li{cursor:pointer;padding:3px 0}.scan li:hover{color:var(--accent)}
+.switch{width:38px;height:22px}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="devname">ESP32 Camera</h1>
+  <div class="pills" id="pills"></div>
+</header>
+<nav id="nav">
+  <button data-tab="dash" class="active">Dashboard</button>
+  <button data-tab="live">Live View</button>
+  <button data-tab="camera">Camera</button>
+  <button data-tab="mqtt">MQTT / HA</button>
+  <button data-tab="network">Network</button>
+  <button data-tab="system">System</button>
+</nav>
+<main>
+<section id="dash" class="active">
+  <div class="cols">
+    <div class="card"><h2>Preview</h2>
+      <div class="viewer"><img id="dashimg" alt=""><span class="msg" id="dashmsg">loading…</span></div>
+    </div>
+    <div class="card"><h2>Status</h2><div class="grid" id="metrics"></div></div>
+  </div>
+</section>
+
+<section id="live">
+  <div class="card">
+    <div class="viewer" id="liveview"><img id="liveimg" alt=""><span class="msg" id="livemsg">connecting…</span>
+      <div class="ovl" id="ovl"><span id="ovl-l"></span><span id="ovl-r"></span></div></div>
+    <div class="toolbar">
+      <a class="b" id="snapbtn" href="/capture" download>Snapshot</a>
+      <button class="b sec" id="fsbtn">Fullscreen</button>
+      <label class="muted">Zoom <input type="range" id="zoom" min="1" max="4" step="0.1" value="1"></label>
+      <label class="muted"><input type="checkbox" id="ovlchk" checked> Overlay</label>
+      <label class="muted">Resolution <select id="qres"></select></label>
+      <label class="muted">Quality <input type="number" id="qq" min="4" max="63" style="width:60px"></label>
+      <label class="muted">FPS limit <input type="number" id="qfps" min="0" max="30" style="width:60px"></label>
+    </div>
+    <p class="muted" style="margin:8px 0 0">Stream URL: <code id="streamurl"></code> · Snapshot: <code id="snapurl"></code></p>
+  </div>
+</section>
+
+<section id="camera">
+  <div class="card">
+    <div class="toolbar" style="margin:0">
+      <strong id="sensorname">Sensor</strong>
+      <span class="muted" id="dirty"></span>
+      <span style="flex:1"></span>
+      <button class="b" id="camsave">Save</button>
+      <button class="b sec" id="camdefaults">Restore defaults</button>
+      <button class="b sec" id="camreload">Reload</button>
+    </div>
+    <p class="muted" style="margin:8px 0 0">Changes apply immediately (RAM). <b>Save</b> stores them in flash so they survive a reboot.</p>
+  </div>
+  <div id="camgroups"></div>
+</section>
+
+<section id="mqtt">
+  <div class="cols">
+    <div class="card"><h2>MQTT broker</h2>
+      <form class="f" id="mqttform" autocomplete="off">
+        <label>Enabled</label><div><input type="checkbox" id="m_enabled" class="switch"></div>
+        <label>Broker host</label><input type="text" id="m_host" maxlength="63" placeholder="192.168.88.x or homeassistant.local">
+        <label>Port</label><input type="number" id="m_port" min="1" max="65535">
+        <label>Username</label><input type="text" id="m_user" maxlength="63">
+        <label>Password</label><input type="password" id="m_pass" maxlength="64" placeholder="unchanged">
+        <label>Client ID</label><input type="text" id="m_client_id" maxlength="32">
+        <label>Base topic</label><input type="text" id="m_base" maxlength="32">
+        <label>QoS</label><select id="m_qos"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+        <label>Retain state</label><div><input type="checkbox" id="m_retain" class="switch"></div>
+        <label>Keep alive (s)</label><input type="number" id="m_keepalive" min="5" max="3600">
+        <label>Telemetry every (s)</label><input type="number" id="m_telemetry_s" min="0" max="3600">
+        <label>Snapshot every (s)</label><input type="number" id="m_snapshot_s" min="0" max="86400" title="0 = only on command">
+        <span></span><div><button class="b" type="submit">Save &amp; connect</button></div>
+      </form>
+    </div>
+    <div class="card"><h2>Home Assistant</h2>
+      <form class="f" id="haform">
+        <label>MQTT discovery</label><div><input type="checkbox" id="m_discovery" class="switch"></div>
+        <label>Discovery prefix</label><input type="text" id="m_disc_prefix" maxlength="32">
+        <span></span><div class="toolbar" style="margin:0"><button class="b" type="submit">Save</button><button class="b sec" type="button" id="m_republish">Re-send discovery</button></div>
+      </form>
+      <h2 style="margin-top:16px">Status</h2><table id="mqtttable"></table>
+      <p class="muted">Commands on <code id="m_cmdtopic"></code>: <code>snapshot</code>, <code>reboot</code>, <code>restart_camera</code>. Camera settings as JSON on <code id="m_settopic"></code>, e.g. <code>{"vflip":1}</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="network">
+  <div class="cols">
+    <div class="card"><h2>Wi-Fi settings</h2>
+      <form class="f" id="wifiform" autocomplete="off">
+        <label>SSID</label><input type="text" id="w_ssid" maxlength="32" required>
+        <label>Password</label><input type="password" id="w_pass" maxlength="64" placeholder="unchanged">
+        <label>Hostname</label><input type="text" id="w_host" maxlength="32">
+        <span></span><div><button class="b" type="submit">Save &amp; connect</button></div>
+      </form>
+      <h2 style="margin-top:16px">Nearby networks <button class="b sec" id="scanbtn" style="padding:3px 8px">Scan</button></h2>
+      <ul class="scan muted" id="scanlist" style="list-style:none;padding:0;margin:0"></ul>
+    </div>
+    <div class="card"><h2>Connection</h2><table id="nettable"></table></div>
+  </div>
+</section>
+
+<section id="system">
+  <div class="cols">
+    <div class="card"><h2>Camera telemetry <span class="muted" id="telstate" style="font-weight:400"></span></h2><table id="camtel"></table></div>
+    <div class="card"><h2>Module telemetry</h2><table id="modtel"></table></div>
+  </div>
+  <div class="cols">
+    <div class="card"><h2>Device</h2><table id="systable"></table>
+      <form class="f" id="sysform" style="margin-top:12px">
+        <label>Device name</label><input type="text" id="s_name" maxlength="32">
+        <span></span><div><button class="b" type="submit">Save</button></div>
+      </form>
+    </div>
+    <div class="card"><h2>Actions</h2>
+      <div class="toolbar" style="margin:0">
+        <button class="b sec" id="rebootbtn">Reboot</button>
+        <button class="b danger" id="resetbtn">Reset configuration</button>
+        <button class="b danger" id="resetallbtn">Reset configuration + Wi-Fi</button>
+      </div>
+      <h2 style="margin-top:16px">Tasks</h2><table id="tasktable"></table>
+    </div>
+  </div>
+</section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const host = location.hostname || '192.168.4.1';
+const streamURL = `http://${host}:81/stream`;
+let status = null, camCfg = null, dirty = false, dashTimer = null;
+
+function toast(msg, ms = 2500) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms); }
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+const fmtBytes = b => b >= 1048576 ? (b / 1048576).toFixed(2) + ' MB' : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
+function fmtUptime(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return (d ? d + 'd ' : '') + h + 'h ' + m + 'm ' + (s % 60) + 's'; }
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ---------- tabs ---------- */
+function showTab(id) {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('active', s.id === id));
+  // Only hold a stream connection while Live View is visible (max 3 clients on the device).
+  $('liveimg').src = id === 'live' ? streamURL + '?t=' + Date.now() : '';
+  if (id === 'live') { $('livemsg').style.display = ''; loadCamera(); }
+  clearInterval(dashTimer);
+  if (id === 'dash') { refreshDash(); dashTimer = setInterval(refreshDash, 15000); }
+  if (id === 'camera') loadCamera();
+  if (id === 'network') loadWifi();
+  if (id === 'mqtt') loadMqtt();
+  clearInterval(telTimer);
+  if (id === 'system') { loadSystem(); loadTelemetry(); telTimer = setInterval(loadTelemetry, 2000); }
+  try { localStorage.setItem('tab', id); } catch (e) {}
+}
+$('nav').onclick = e => { if (e.target.dataset.tab) showTab(e.target.dataset.tab); };
+
+/* ---------- status / telemetry ---------- */
+function pill(name, state, title) { return `<span class="pill" title="${esc(title || '')}"><span class="dot ${state}"></span>${name}</span>`; }
+function renderStatus(s) {
+  status = s;
+  // NTP blocked or not yet synced: hand the device the browser clock (spec §55 fallback).
+  if (!s.time && !renderStatus.sentTime) { renderStatus.sentTime = true; api('/api/time', { epoch: Math.floor(Date.now() / 1000) }).catch(() => {}); }
+  $('devname').textContent = s.device;
+  document.title = s.device;
+  const psramPct = s.psram_total ? s.psram_free / s.psram_total : 0;
+  const mod = v => v === 'n/a' || v === 'off' ? '' : v === 'ok' ? 'ok' : 'bad';
+  $('pills').innerHTML =
+    pill('Wi-Fi', s.wifi.connected ? (s.wifi.rssi < -75 ? 'warn' : 'ok') : (s.wifi.ap_active ? 'warn' : 'bad'), s.wifi.connected ? s.wifi.ssid + ' ' + s.wifi.rssi + ' dBm' : 'setup AP ' + s.wifi.ap_ssid) +
+    pill('Camera', s.camera.ok ? 'ok' : 'bad', s.camera.sensor) +
+    pill('PSRAM', s.psram_total ? (psramPct < 0.2 ? 'warn' : 'ok') : 'bad', fmtBytes(s.psram_free) + ' free') +
+    pill('MQTT', s.modules.mqtt === 'connecting' ? 'warn' : mod(s.modules.mqtt), s.modules.mqtt) + pill('HA', s.modules.ha === 'connecting' ? 'warn' : mod(s.modules.ha), s.modules.ha) +
+    pill('SD', mod(s.modules.sd), 'Phase 6') + pill('AI', mod(s.modules.ai), 'Phase 5');
+  const c = s.camera;
+  const m = [
+    ['Sensor', c.ok ? (c.standby ? 'standby' : 'active') : 'error'], ['Camera FPS', c.fps.toFixed(1)], ['Resolution', c.width ? c.width + '×' + c.height : '—'], ['JPEG quality', c.quality],
+    ['Frame size', c.frame_bytes ? fmtBytes(c.frame_bytes) : '—'], ['Stream clients', c.stream_clients],
+    ['Wi-Fi RSSI', s.wifi.connected ? s.wifi.rssi + ' dBm' : '—'], ['IP', s.wifi.ip || s.wifi.ap_ip || '—'],
+    ['Uptime', fmtUptime(s.uptime)], ['Heap free', fmtBytes(s.heap)], ['Heap min', fmtBytes(s.heap_min)],
+    ['PSRAM free', fmtBytes(s.psram_free) + ' / ' + fmtBytes(s.psram_total)], ['CPU load', s.cpu[0] + '% / ' + s.cpu[1] + '%'],
+    ['Frames', c.frames], ['Cam errors', c.errors + ' (restarts ' + c.restarts + ')'], ['Time', s.time ? s.time + (s.time_source === 'browser' ? ' (browser)' : '') : 'not synced'], ['LED', s.led],
+  ];
+  $('metrics').innerHTML = m.map(([k, v]) => `<div class="metric"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+  $('ovl-l').textContent = s.time || '';
+  $('ovl-r').textContent = `${c.fps.toFixed(1)} fps · ${s.wifi.connected ? s.wifi.rssi + ' dBm' : 'AP'}`;
+  if (document.querySelector('#network.active')) renderNet();
+  if (document.querySelector('#mqtt.active')) renderMqtt();
+}
+function connectWS() {
+  let ws;
+  try { ws = new WebSocket(`ws://${location.host || host}/ws`); } catch (e) { return pollStatus(); }
+  ws.onmessage = e => { try { const j = JSON.parse(e.data); if (j.type === 'status') renderStatus(j); } catch (x) {} };
+  ws.onclose = () => setTimeout(connectWS, 3000);
+}
+async function pollStatus() { try { renderStatus(await api('/api/status')); } catch (e) {} }
+
+/* ---------- dashboard ---------- */
+function refreshDash() {
+  const img = new Image();
+  img.onload = () => { $('dashimg').src = img.src; $('dashmsg').style.display = 'none'; };
+  img.onerror = () => { $('dashmsg').textContent = 'no image'; $('dashmsg').style.display = ''; };
+  img.src = '/capture?t=' + Date.now();
+}
+
+/* ---------- live view ---------- */
+$('liveimg').onload = () => $('livemsg').style.display = 'none';
+$('liveimg').onerror = () => { if ($('liveimg').src) { $('livemsg').textContent = 'stream unavailable (too many clients?)'; $('livemsg').style.display = ''; } };
+$('zoom').oninput = e => $('liveimg').style.transform = `scale(${e.target.value})`;
+$('ovlchk').onchange = e => $('ovl').style.display = e.target.checked ? '' : 'none';
+$('fsbtn').onclick = () => { const v = $('liveview'); (v.requestFullscreen || v.webkitRequestFullscreen).call(v); };
+$('streamurl').textContent = streamURL;
+$('snapurl').textContent = `http://${host}/capture`;
+async function quickSet(id, v) {
+  try { camCfg = await api('/api/camera', { [id]: Number(v) }); markDirty(); renderCamera(); } catch (e) { toast(e.message); }
+}
+$('qres').onchange = e => quickSet('framesize', e.target.value);
+$('qq').onchange = e => quickSet('quality', e.target.value);
+$('qfps').onchange = e => quickSet('fps_limit', e.target.value);
+
+/* ---------- camera settings ---------- */
+const GROUPS = { stream: 'Stream / JPEG', image: 'Image', exposure: 'Exposure & gain', wb: 'White balance', dsp: 'Sensor DSP', focus: 'Autofocus', init: 'Driver (restarts camera)' };
+async function loadCamera() { if (!camCfg) $('camgroups').innerHTML = '<div class="card muted">loading…</div>'; try { camCfg = await api('/api/camera'); renderCamera(); } catch (e) { toast('camera: ' + e.message); } }
+function markDirty() { dirty = true; $('dirty').textContent = '● unsaved changes'; }
+function paramVal(id) { return camCfg.params.find(p => p.id === id); }
+function renderCamera() {
+  if (!camCfg) return;
+  const s = camCfg.sensor;
+  $('sensorname').textContent = `${s.name}${s.ok ? '' : ' (not responding)'}`;
+  const fsz = paramVal('framesize');
+  $('qres').innerHTML = fsz.options.map(o => `<option value="${o.v}"${o.v === fsz.value ? ' selected' : ''}>${esc(o.name)}</option>`).join('');
+  $('qq').value = paramVal('quality').value; $('qfps').value = paramVal('fps_limit').value;
+  if (!document.querySelector('#camera.active')) return;
+  const box = $('camgroups'); box.innerHTML = '';
+  for (const [g, title] of Object.entries(GROUPS)) {
+    const ps = camCfg.params.filter(p => p.group === g && p.supported);
+    if (!ps.length) continue;
+    const card = document.createElement('div'); card.className = 'card';
+    card.innerHTML = `<h2>${title}</h2>`;
+    for (const p of ps) card.appendChild(paramRow(p));
+    if (g === 'focus') {
+      const af = s.af || {};
+      const d = document.createElement('div'); d.className = 'toolbar';
+      d.innerHTML = `<button class="b sec" id="aftrig"${af.ready ? '' : ' disabled'}>Focus now</button><span class="muted">${af.ready ? (af.busy ? 'focusing…' : af.focused ? 'focused' : 'idle') : 'enable autofocus to load the AF firmware (only works on modules with a VCM lens)'}</span>`;
+      card.appendChild(d);
+    }
+    box.appendChild(card);
+  }
+  const at = $('aftrig'); if (at) at.onclick = async () => { try { await api('/api/camera/af', {}); toast('focus triggered'); setTimeout(loadCamera, 1500); } catch (e) { toast(e.message); } };
+}
+let applyTimer = {};
+function paramRow(p) {
+  const row = document.createElement('div'); row.className = 'row' + (p.value !== p.def ? ' changed' : '');
+  const lab = `<label title="${p.id}">${esc(p.label)}${p.restart ? '<span class="tag">restart</span>' : ''}</label>`;
+  let ctl, num = '';
+  if (p.type === 'enum') {
+    ctl = `<select>${p.options.map(o => `<option value="${o.v}"${o.v === p.value ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>`;
+  } else if (p.type === 'bool') {
+    ctl = `<input type="checkbox" class="switch"${p.value ? ' checked' : ''}>`;
+  } else {
+    ctl = `<input type="range" min="${p.min}" max="${p.max}" value="${p.value}">`;
+    num = `<input type="number" min="${p.min}" max="${p.max}" value="${p.value}">`;
+  }
+  row.innerHTML = `${lab}<div>${ctl}</div><div>${num}</div><button class="rst" title="Reset to default (${p.def})">↺</button>`;
+  const c = row.querySelector('select,input[type=checkbox],input[type=range]');
+  const n = row.querySelector('input[type=number]');
+  const send = v => {
+    clearTimeout(applyTimer[p.id]);
+    applyTimer[p.id] = setTimeout(async () => {
+      try {
+        camCfg = await api('/api/camera', { [p.id]: v }); markDirty();
+        row.classList.toggle('changed', v !== p.def);
+        if (p.restart || p.id === 'af_mode') renderCamera();
+      } catch (e) { toast(e.message); loadCamera(); }
+    }, p.restart ? 600 : 200);
+  };
+  c.oninput = () => { const v = p.type === 'bool' ? (c.checked ? 1 : 0) : Number(c.value); if (n) n.value = v; send(v); };
+  if (n) n.onchange = () => { c.value = n.value; send(Number(n.value)); };
+  row.querySelector('.rst').onclick = () => { if (p.type === 'bool') c.checked = !!p.def; else c.value = p.def; if (n) n.value = p.def; send(p.def); };
+  return row;
+}
+$('camsave').onclick = async () => { try { await api('/api/camera/save', {}); dirty = false; $('dirty').textContent = ''; toast('Saved to flash'); } catch (e) { toast(e.message); } };
+$('camdefaults').onclick = async () => { try { camCfg = await api('/api/camera/defaults', {}); markDirty(); renderCamera(); toast('Defaults applied (press Save to keep)'); } catch (e) { toast(e.message); } };
+$('camreload').onclick = loadCamera;
+
+/* ---------- MQTT / HA ---------- */
+const MQ_FIELDS = ['host', 'port', 'user', 'client_id', 'base', 'qos', 'keepalive', 'telemetry_s', 'snapshot_s', 'disc_prefix'];
+const MQ_BOOLS = ['enabled', 'retain', 'discovery'];
+let mqttCfg = null;
+async function loadMqtt() {
+  try {
+    mqttCfg = await api('/api/mqtt');
+    for (const k of MQ_FIELDS) $('m_' + k).value = mqttCfg[k];
+    for (const k of MQ_BOOLS) $('m_' + k).checked = mqttCfg[k];
+    if (!mqttCfg.host) $('m_enabled').checked = true;  // first setup: entering a broker means 'use it'
+    $('m_pass').placeholder = mqttCfg.has_password ? 'unchanged' : 'none';
+    renderMqtt();
+  } catch (e) { toast(e.message); }
+}
+function renderMqtt() {
+  if (!mqttCfg) return;
+  const st = status && status.modules ? status.modules : {};
+  const c = mqttCfg;
+  $('mqtttable').innerHTML = [['Broker', st.mqtt ?? c.state], ['Home Assistant', st.ha ?? c.ha_state], ['Last error', c.last_error || '—'],
+    ['Device ID', c.device_id], ['Topics', c.topic_base + '/…']].map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('');
+  $('m_cmdtopic').textContent = c.topic_base + '/command';
+  $('m_settopic').textContent = c.topic_base + '/camera/set';
+}
+async function saveMqtt(e) {
+  e.preventDefault();
+  const body = {};
+  for (const k of MQ_FIELDS) body[k] = ['port', 'qos', 'keepalive', 'telemetry_s', 'snapshot_s'].includes(k) ? Number($('m_' + k).value) : $('m_' + k).value;
+  for (const k of MQ_BOOLS) body[k] = $('m_' + k).checked;
+  if ($('m_pass').value) body.pass = $('m_pass').value;
+  try { await api('/api/mqtt', body); $('m_pass').value = ''; toast('Saved, connecting…'); setTimeout(loadMqtt, 3000); } catch (x) { toast(x.message); }
+}
+$('mqttform').onsubmit = saveMqtt;
+$('haform').onsubmit = saveMqtt;
+$('m_republish').onclick = async () => { try { await api('/api/mqtt/discovery', {}); toast('Discovery sent'); } catch (e) { toast(e.message); } };
+
+/* ---------- network ---------- */
+async function loadWifi() {
+  try { const w = await api('/api/wifi'); $('w_ssid').value = w.ssid; $('w_host').value = w.hostname; $('w_pass').placeholder = w.has_password ? 'unchanged' : 'none'; } catch (e) {}
+  renderNet();
+}
+function renderNet() {
+  if (!status) return;
+  const w = status.wifi;
+  const rows = [['State', w.connected ? 'connected' : 'not connected'], ['SSID', w.ssid || '—'], ['IP', w.ip || '—'], ['Hostname', w.hostname + '.local'], ['RSSI', w.connected ? w.rssi + ' dBm' : '—'],
+    ['Channel', w.channel || '—'], ['BSSID', w.bssid || '—'], ['Reconnects', w.reconnects], ['Setup AP', w.ap_active ? `${w.ap_ssid} (${w.ap_ip})` : 'off']];
+  $('nettable').innerHTML = rows.map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('');
+}
+$('wifiform').onsubmit = async e => {
+  e.preventDefault();
+  const body = { ssid: $('w_ssid').value, hostname: $('w_host').value };
+  if ($('w_pass').value) body.pass = $('w_pass').value;
+  try { await api('/api/wifi', body); toast('Saved, connecting…'); $('w_pass').value = ''; } catch (x) { toast(x.message); }
+};
+$('scanbtn').onclick = async () => {
+  $('scanlist').innerHTML = '<li>scanning…</li>';
+  try {
+    const list = await api('/api/wifi/scan');
+    $('scanlist').innerHTML = list.length ? list.map(n => `<li data-ssid="${esc(n.ssid)}">${esc(n.ssid || '(hidden)')} · ${n.rssi} dBm · ch ${n.channel} · ${n.auth}</li>`).join('') : '<li>no networks found (retry while not connecting)</li>';
+  } catch (e) { $('scanlist').innerHTML = `<li>${esc(e.message)}</li>`; }
+};
+$('scanlist').onclick = e => { if (e.target.dataset.ssid) { $('w_ssid').value = e.target.dataset.ssid; $('w_pass').value = ''; $('w_pass').placeholder = 'password'; $('w_pass').focus(); } };
+
+/* ---------- telemetry ---------- */
+let telTimer = null;
+const trow = (k, v) => v === undefined || v === null || v === '' ? '' : `<tr><th>${k}</th><td>${esc(v)}</td></tr>`;
+async function loadTelemetry() {
+  try {
+    const t = await api('/api/telemetry'), c = t.camera, l = c.live || {}, m = t.module, w = status ? status.wifi : {};
+    $('telstate').textContent = c.standby ? '(sensor in standby, live values frozen)' : '';
+    $('camtel').innerHTML = [
+      trow('Sensor', `${c.sensor} (PID ${c.pid})`), trow('State', !c.ok ? 'error' : c.standby ? 'standby' : 'active'),
+      trow('Output size', l.output_size), trow('Capture FPS', c.fps), trow('XCLK', c.xclk_mhz + ' MHz'),
+      trow('Exposure', l.exposure_lines !== undefined ? `${l.exposure_lines} lines (${l.exposure_pct_of_frame}% of frame)${l.aec_manual ? ', manual' : ''}` : undefined),
+      trow('Analog gain', l.analog_gain !== undefined ? `${l.analog_gain}x${l.agc_manual ? ', manual' : ''}` : undefined),
+      trow('AWB gain R/G/B', l.awb_gain ? `${l.awb_gain.r} / ${l.awb_gain.g} / ${l.awb_gain.b}` : undefined),
+      trow('AEC average luma', l.avg_luma !== undefined ? l.avg_luma + ' / 255' : undefined), trow('Light index', l.light_index),
+      trow('Light flicker', l.light_flicker), trow('Night mode', l.night_mode === undefined ? undefined : l.night_mode ? 'on' : 'off'),
+      trow('VTS / HTS', l.vts ? `${l.vts} / ${l.hts}` : undefined),
+      trow('Frames / errors / restarts', `${c.frames} / ${c.grab_errors} / ${c.driver_restarts}`),
+      trow('Last frame', c.last_frame_bytes ? fmtBytes(c.last_frame_bytes) : '—'),
+      trow('Frame pool', `${c.frame_pool.in_use}/${c.frame_pool.slots} slots, ${fmtBytes(c.frame_pool.psram_bytes)} PSRAM`),
+    ].join('');
+    $('modtel').innerHTML = [
+      trow('MAC', m.mac), trow('Wi-Fi', w.connected ? `${w.rssi} dBm, ch ${w.channel}, ${m.wifi_phy || '?'}` : 'not connected'),
+      trow('Wi-Fi TX power', m.wifi_tx_power_dbm + ' dBm'), trow('BSSID', w.bssid), trow('Reconnects', w.reconnects),
+      trow('CPU load', status ? `${status.cpu[0]}% / ${status.cpu[1]}%` : undefined),
+      trow('Heap free / min', status ? `${fmtBytes(status.heap)} / ${fmtBytes(status.heap_min)}` : undefined),
+      trow('DMA heap free / largest', `${fmtBytes(m.dma_heap_free)} / ${fmtBytes(m.dma_heap_largest)}`),
+      trow('PSRAM free / min', status ? `${fmtBytes(status.psram_free)} / ${fmtBytes(m.psram_min_free)}` : undefined),
+      trow('NVS entries used / free', m.nvs ? `${m.nvs.used_entries} / ${m.nvs.free_entries}` : undefined),
+      trow('OTA', `running ${m.ota.running} (${m.ota.state}), next ${m.ota.next}`),
+      trow('Time', status && status.time ? `${status.time} (${status.time_source})` : 'not synced'),
+    ].join('');
+  } catch (e) {}
+}
+
+/* ---------- system ---------- */
+async function loadSystem() {
+  try {
+    const s = await api('/api/system');
+    $('s_name').value = s.device_name;
+    const rows = [['Firmware', s.firmware], ['Build', s.build_date], ['ESP-IDF', s.idf_version], ['Chip', `${s.chip} rev ${s.chip_revision}, ${s.cores} cores @ ${s.cpu_mhz} MHz`],
+      ['Flash', fmtBytes(s.flash_size)], ['App partition', `${s.app_partition} (${fmtBytes(s.app_partition_size)})`], ['Heap free / min / largest', `${fmtBytes(s.heap_free)} / ${fmtBytes(s.heap_min)} / ${fmtBytes(s.heap_largest)}`],
+      ['PSRAM free / total', `${fmtBytes(s.psram_free)} / ${fmtBytes(s.psram_total)}`], ['Uptime', fmtUptime(s.uptime_s)], ['Reset reason', s.reset_reason], ['Boot count', s.boot_count]];
+    $('systable').innerHTML = rows.map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('');
+    $('tasktable').innerHTML = '<tr><th>Task</th><th>Prio</th><th>Core</th><th class="num">Stack free</th></tr>' +
+      s.tasks.sort((a, b) => a.name.localeCompare(b.name)).map(t => `<tr><td>${esc(t.name)}</td><td>${t.prio}</td><td>${t.core < 0 ? 'any' : t.core}</td><td class="num">${t.stack_free}</td></tr>`).join('');
+  } catch (e) { toast(e.message); }
+}
+$('sysform').onsubmit = async e => { e.preventDefault(); try { await api('/api/system', { device_name: $('s_name').value }); toast('Saved'); pollStatus(); } catch (x) { toast(x.message); } };
+$('rebootbtn').onclick = async () => { if (!confirm('Reboot the camera?')) return; await api('/api/reboot', {}).catch(() => {}); toast('Rebooting…', 8000); };
+$('resetbtn').onclick = async () => { if (!confirm('Reset all settings except Wi-Fi?')) return; await api('/api/factory-reset', { wifi: false }).catch(() => {}); toast('Reset, rebooting…', 8000); };
+$('resetallbtn').onclick = async () => { if (!confirm('Reset ALL settings including Wi-Fi? The camera will start its setup access point.')) return; await api('/api/factory-reset', { wifi: true }).catch(() => {}); toast('Reset, rebooting…', 8000); };
+
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+pollStatus();
+connectWS();
+let start = 'dash'; try { start = localStorage.getItem('tab') || 'dash'; } catch (e) {}
+showTab(document.getElementById(start) ? start : 'dash');
+</script>
+</body>
+</html>

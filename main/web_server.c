@@ -1,0 +1,590 @@
+#include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
+#include <time.h>
+#include "web_server.h"
+#include "app_config.h"
+#include "camera_mgr.h"
+#include "esp_app_desc.h"
+#include "esp_http_server.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "mqtt_mgr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "status_led.h"
+#include "sysmon.h"
+#include "wifi_mgr.h"
+
+static const char *TAG = "web";
+
+#define MAX_STREAM_CLIENTS  3
+#define MAX_BODY_LEN        4096
+#define STREAM_BOUNDARY     "esp32camframe"
+#define STREAM_IDLE_LIMIT   10   // consecutive 3 s waits without a frame before dropping a client
+#define WS_PUSH_PERIOD_MS   1000
+
+extern const char index_html_start[] asm("_binary_index_html_start");
+extern const char index_html_end[] asm("_binary_index_html_end");
+
+static httpd_handle_t s_api;
+static httpd_handle_t s_stream;
+static volatile int s_stream_clients;
+
+/* ------------------------------------------------------------------ helpers --------------- */
+
+static esp_err_t send_json(httpd_req_t *req, cJSON *json, const char *status)
+{
+    char *txt = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+    if (status) {
+        httpd_resp_set_status(req, status);
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    esp_err_t err = httpd_resp_sendstr(req, txt ? txt : "{}");
+    free(txt);
+    return err;
+}
+
+static esp_err_t send_result(httpd_req_t *req, esp_err_t result, const char *msg)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", result == ESP_OK);
+    if (result != ESP_OK) {
+        cJSON_AddStringToObject(o, "error", msg ? msg : esp_err_to_name(result));
+    }
+    return send_json(req, o, result == ESP_OK ? NULL : "400 Bad Request");
+}
+
+static cJSON *read_json_body(httpd_req_t *req)
+{
+    int len = req->content_len;
+    if (len <= 0 || len > MAX_BODY_LEN) {
+        return NULL;
+    }
+    char *buf = malloc(len + 1);
+    if (!buf) {
+        return NULL;
+    }
+    int got = 0;
+    while (got < len) {
+        int r = httpd_req_recv(req, buf + got, len - got);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (r <= 0) {
+            free(buf);
+            return NULL;
+        }
+        got += r;
+    }
+    buf[len] = 0;
+    cJSON *j = cJSON_Parse(buf);
+    free(buf);
+    return j;
+}
+
+static const char *json_str(const cJSON *obj, const char *key)
+{
+    const cJSON *it = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsString(it) ? it->valuestring : NULL;
+}
+
+static void restart_cb(void *arg)
+{
+    esp_restart();
+}
+
+static void schedule_restart(void)
+{
+    static esp_timer_handle_t t;
+    if (!t) {
+        const esp_timer_create_args_t a = {.callback = restart_cb, .name = "restart"};
+        esp_timer_create(&a, &t);
+    }
+    esp_timer_start_once(t, 500 * 1000);  // let the HTTP response go out first
+}
+
+/* ------------------------------------------------------------------ status ---------------- */
+
+cJSON *web_status_json(void)
+{
+    sys_stats_t sys;
+    wifi_status_t wifi;
+    cam_stats_t cam;
+    sysmon_get(&sys);
+    wifi_mgr_get_status(&wifi);
+    cam_mgr_get_stats(&cam);
+
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "device", g_sys_cfg.device_name);
+    cJSON_AddStringToObject(o, "firmware", esp_app_get_description()->version);
+    cJSON_AddNumberToObject(o, "uptime", (double)sys.uptime_s);
+    cJSON_AddNumberToObject(o, "heap", sys.heap_free);
+    cJSON_AddNumberToObject(o, "heap_min", sys.heap_min);
+    cJSON_AddNumberToObject(o, "heap_largest", sys.heap_largest);
+    cJSON_AddNumberToObject(o, "psram_total", sys.psram_total);
+    cJSON_AddNumberToObject(o, "psram_free", sys.psram_free);
+    cJSON *cpu = cJSON_AddArrayToObject(o, "cpu");
+    cJSON_AddItemToArray(cpu, cJSON_CreateNumber((int)sys.cpu_load[0]));
+    cJSON_AddItemToArray(cpu, cJSON_CreateNumber((int)sys.cpu_load[1]));
+    cJSON_AddStringToObject(o, "led", status_led_state_name());
+
+    char tbuf[24] = "";
+    if (wifi.time_synced) {
+        time_t now = time(NULL);
+        struct tm tm;
+        localtime_r(&now, &tm);
+        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tm);
+    }
+    cJSON_AddStringToObject(o, "time", tbuf);
+    cJSON_AddStringToObject(o, "time_source", wifi.time_source);
+
+    cJSON *w = cJSON_AddObjectToObject(o, "wifi");
+    cJSON_AddBoolToObject(w, "connected", wifi.sta_connected);
+    cJSON_AddStringToObject(w, "ssid", g_wifi_cfg.ssid);
+    cJSON_AddStringToObject(w, "ip", wifi.ip);
+    cJSON_AddStringToObject(w, "hostname", g_wifi_cfg.hostname);
+    cJSON_AddNumberToObject(w, "rssi", wifi.rssi);
+    cJSON_AddNumberToObject(w, "channel", wifi.channel);
+    cJSON_AddStringToObject(w, "bssid", wifi.bssid);
+    cJSON_AddNumberToObject(w, "reconnects", wifi.reconnects);
+    cJSON_AddBoolToObject(w, "ap_active", wifi.ap_active);
+    cJSON_AddStringToObject(w, "ap_ssid", wifi.ap_ssid);
+    cJSON_AddStringToObject(w, "ap_ip", wifi.ap_ip);
+
+    cJSON *c = cJSON_AddObjectToObject(o, "camera");
+    cJSON_AddBoolToObject(c, "ok", cam.ok);
+    cJSON_AddBoolToObject(c, "standby", cam.standby);
+    cJSON_AddStringToObject(c, "sensor", cam_mgr_sensor_name());
+    cJSON_AddNumberToObject(c, "fps", (int)(cam.fps * 10) / 10.0);
+    cJSON_AddNumberToObject(c, "frames", cam.frames);
+    cJSON_AddNumberToObject(c, "errors", cam.errors);
+    cJSON_AddNumberToObject(c, "restarts", cam.restarts);
+    cJSON_AddNumberToObject(c, "width", cam.width);
+    cJSON_AddNumberToObject(c, "height", cam.height);
+    cJSON_AddNumberToObject(c, "quality", cam.quality);
+    cJSON_AddNumberToObject(c, "frame_bytes", cam.last_len);
+    cJSON_AddNumberToObject(c, "stream_clients", s_stream_clients);
+
+    // Modules from later phases report their state here once implemented.
+    cJSON *m = cJSON_AddObjectToObject(o, "modules");
+    cJSON_AddStringToObject(m, "mqtt", mqtt_mgr_state());
+    cJSON_AddStringToObject(m, "ha", mqtt_mgr_ha_state());
+    cJSON_AddStringToObject(m, "sd", "n/a");
+    cJSON_AddStringToObject(m, "ai", "off");
+    cJSON_AddStringToObject(m, "ota", "n/a");
+    return o;
+}
+
+/* ------------------------------------------------------------------ UI -------------------- */
+
+static esp_err_t index_get(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    return httpd_resp_send(req, index_html_start, index_html_end - index_html_start);
+}
+
+static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t err)
+{
+    if (strncmp(req->uri, "/api/", 5) == 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such endpoint");
+        return ESP_FAIL;
+    }
+    // Anything else (captive-portal probes, stale links) lands on the UI.
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+/* ------------------------------------------------------------------ API: status/system ---- */
+
+static esp_err_t status_get(httpd_req_t *req)
+{
+    return send_json(req, web_status_json(), NULL);
+}
+
+static esp_err_t system_get(httpd_req_t *req)
+{
+    return send_json(req, sysmon_system_json(), NULL);
+}
+
+static esp_err_t telemetry_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "camera", cam_mgr_telemetry_json());
+    cJSON_AddItemToObject(o, "module", sysmon_module_json());
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t system_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return send_result(req, ESP_ERR_INVALID_ARG, "invalid JSON");
+    }
+    const char *name = json_str(body, "device_name");
+    esp_err_t err = ESP_OK;
+    if (name) {
+        if (!name[0] || strlen(name) >= sizeof(g_sys_cfg.device_name)) {
+            err = ESP_ERR_INVALID_ARG;
+        } else {
+            strlcpy(g_sys_cfg.device_name, name, sizeof(g_sys_cfg.device_name));
+            err = app_config_save_system();
+        }
+    }
+    cJSON_Delete(body);
+    return send_result(req, err, err == ESP_ERR_INVALID_ARG ? "device_name must be 1-32 characters" : NULL);
+}
+
+static esp_err_t time_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    const cJSON *e = body ? cJSON_GetObjectItem(body, "epoch") : NULL;
+    esp_err_t err = cJSON_IsNumber(e) ? wifi_mgr_set_time_manual((int64_t)e->valuedouble) : ESP_ERR_INVALID_ARG;
+    cJSON_Delete(body);
+    return send_result(req, err, err == ESP_ERR_INVALID_ARG ? "expected {\"epoch\": <unix seconds>}" : NULL);
+}
+
+static esp_err_t reboot_post(httpd_req_t *req)
+{
+    ESP_LOGW(TAG, "reboot requested via API");
+    schedule_restart();
+    return send_result(req, ESP_OK, NULL);
+}
+
+static esp_err_t factory_reset_post(httpd_req_t *req)
+{
+    bool wifi = false;
+    cJSON *body = read_json_body(req);
+    if (body) {
+        wifi = cJSON_IsTrue(cJSON_GetObjectItem(body, "wifi"));
+        cJSON_Delete(body);
+    }
+    app_config_factory_reset(wifi);
+    schedule_restart();
+    return send_result(req, ESP_OK, NULL);
+}
+
+/* ------------------------------------------------------------------ API: camera ----------- */
+
+static esp_err_t camera_get(httpd_req_t *req)
+{
+    return send_json(req, cam_mgr_settings_to_json(), NULL);
+}
+
+static esp_err_t camera_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!cJSON_IsObject(body)) {
+        cJSON_Delete(body);
+        return send_result(req, ESP_ERR_INVALID_ARG, "expected a JSON object");
+    }
+    char err[96];
+    int rejected = cam_mgr_apply_json(body, err, sizeof(err));
+    cJSON_Delete(body);
+    cJSON *resp = cam_mgr_settings_to_json();
+    cJSON_AddBoolToObject(resp, "ok", rejected == 0);
+    if (rejected) {
+        cJSON_AddStringToObject(resp, "error", err);
+    }
+    return send_json(req, resp, rejected ? "400 Bad Request" : NULL);
+}
+
+static esp_err_t camera_save_post(httpd_req_t *req)
+{
+    return send_result(req, cam_mgr_save(), NULL);
+}
+
+static esp_err_t camera_defaults_post(httpd_req_t *req)
+{
+    esp_err_t err = cam_mgr_restore_defaults();
+    if (err != ESP_OK) {
+        return send_result(req, err, "camera restart failed");
+    }
+    return send_json(req, cam_mgr_settings_to_json(), NULL);
+}
+
+static esp_err_t camera_af_post(httpd_req_t *req)
+{
+    esp_err_t err = cam_mgr_af_trigger();
+    return send_result(req, err, err == ESP_ERR_INVALID_STATE ? "autofocus not enabled" : NULL);
+}
+
+static esp_err_t snapshot_get(httpd_req_t *req)
+{
+    cam_frame_t *f = cam_mgr_snapshot(pdMS_TO_TICKS(5000));
+    if (!f) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "camera did not deliver a frame");
+        return ESP_FAIL;
+    }
+    char disp[64];
+    snprintf(disp, sizeof(disp), "inline; filename=snapshot_%lu.jpg", (unsigned long)time(NULL));
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    esp_err_t err = httpd_resp_send(req, (const char *)f->buf, f->len);
+    cam_mgr_frame_release(f);
+    return err;
+}
+
+/* ------------------------------------------------------------------ API: wifi ------------- */
+
+static esp_err_t wifi_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "ssid", g_wifi_cfg.ssid);
+    cJSON_AddBoolToObject(o, "has_password", g_wifi_cfg.pass[0] != 0);
+    cJSON_AddStringToObject(o, "hostname", g_wifi_cfg.hostname);
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t wifi_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return send_result(req, ESP_ERR_INVALID_ARG, "invalid JSON");
+    }
+    const char *ssid = json_str(body, "ssid");
+    const char *pass = json_str(body, "pass");
+    const char *host = json_str(body, "hostname");
+    // Omitted password keeps the stored one when the SSID is unchanged.
+    if (!pass && ssid && strcmp(ssid, g_wifi_cfg.ssid) == 0) {
+        pass = g_wifi_cfg.pass;
+    }
+    esp_err_t err = wifi_mgr_set_credentials(ssid ? ssid : g_wifi_cfg.ssid, pass, host);
+    cJSON_Delete(body);
+    return send_result(req, err, err == ESP_ERR_INVALID_ARG ? "invalid SSID or password" : NULL);
+}
+
+static esp_err_t mqtt_get(httpd_req_t *req)
+{
+    return send_json(req, mqtt_mgr_config_json(), NULL);
+}
+
+static esp_err_t mqtt_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!cJSON_IsObject(body)) {
+        cJSON_Delete(body);
+        return send_result(req, ESP_ERR_INVALID_ARG, "expected a JSON object");
+    }
+    char err[96] = "";
+    esp_err_t e = mqtt_mgr_set_config(body, err, sizeof(err));
+    cJSON_Delete(body);
+    return send_result(req, e, err[0] ? err : NULL);
+}
+
+static esp_err_t mqtt_discovery_post(httpd_req_t *req)
+{
+    esp_err_t e = mqtt_mgr_republish_discovery();
+    return send_result(req, e, e == ESP_ERR_INVALID_STATE ? "MQTT not connected or discovery disabled" : NULL);
+}
+
+static esp_err_t wifi_scan_get(httpd_req_t *req)
+{
+    return send_json(req, wifi_mgr_scan(), NULL);
+}
+
+/* ------------------------------------------------------------------ WebSocket ------------- */
+
+static esp_err_t ws_handler(httpd_req_t *req)
+{
+    if (req->method == HTTP_GET) {
+        ESP_LOGI(TAG, "WebSocket client connected (fd %d)", httpd_req_to_sockfd(req));
+        return ESP_OK;
+    }
+    // Clients do not send commands yet; drain and ignore incoming frames.
+    httpd_ws_frame_t frame = {0};
+    esp_err_t err = httpd_ws_recv_frame(req, &frame, 0);
+    if (err != ESP_OK || frame.len == 0 || frame.len > 512) {
+        return err;
+    }
+    uint8_t buf[513];
+    frame.payload = buf;
+    return httpd_ws_recv_frame(req, &frame, frame.len);
+}
+
+static void ws_broadcast_work(void *arg)
+{
+    char *txt = arg;
+    size_t fds = CONFIG_LWIP_MAX_SOCKETS;
+    int clients[CONFIG_LWIP_MAX_SOCKETS];
+    if (httpd_get_client_list(s_api, &fds, clients) == ESP_OK) {
+        httpd_ws_frame_t frame = {.type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)txt, .len = strlen(txt)};
+        for (size_t i = 0; i < fds; i++) {
+            if (httpd_ws_get_fd_info(s_api, clients[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
+                httpd_ws_send_frame_async(s_api, clients[i], &frame);
+            }
+        }
+    }
+    free(txt);
+}
+
+static bool ws_has_clients(void)
+{
+    size_t fds = CONFIG_LWIP_MAX_SOCKETS;
+    int clients[CONFIG_LWIP_MAX_SOCKETS];
+    if (httpd_get_client_list(s_api, &fds, clients) != ESP_OK) {
+        return false;
+    }
+    for (size_t i = 0; i < fds; i++) {
+        if (httpd_ws_get_fd_info(s_api, clients[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void ws_push_task(void *arg)
+{
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(WS_PUSH_PERIOD_MS));
+        if (!ws_has_clients()) {
+            continue;
+        }
+        cJSON *o = web_status_json();
+        cJSON_AddStringToObject(o, "type", "status");
+        char *txt = cJSON_PrintUnformatted(o);
+        cJSON_Delete(o);
+        if (txt && httpd_queue_work(s_api, ws_broadcast_work, txt) != ESP_OK) {
+            free(txt);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ MJPEG stream ---------- */
+
+static void stream_task(void *arg)
+{
+    httpd_req_t *req = arg;
+    char part[160];
+    uint32_t seq = 0;
+    int idle = 0;
+
+    if (__atomic_add_fetch(&s_stream_clients, 1, __ATOMIC_SEQ_CST) == 1) {
+        status_led_set_streaming(true);
+    }
+    cam_mgr_consumer_add();
+    ESP_LOGI(TAG, "stream client connected (%d active)", s_stream_clients);
+
+    httpd_resp_set_type(req, "multipart/x-mixed-replace;boundary=" STREAM_BOUNDARY);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    for (;;) {
+        cam_frame_t *f = cam_mgr_frame_wait(seq, pdMS_TO_TICKS(3000));
+        if (!f) {
+            if (++idle >= STREAM_IDLE_LIMIT) {
+                break;
+            }
+            continue;
+        }
+        idle = 0;
+        seq = f->seq;
+        int n = snprintf(part, sizeof(part),
+                         "\r\n--" STREAM_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n"
+                         "X-Timestamp: %lld.%06lld\r\n\r\n",
+                         (unsigned)f->len, f->timestamp_us / 1000000, f->timestamp_us % 1000000);
+        esp_err_t err = httpd_resp_send_chunk(req, part, n);
+        if (err == ESP_OK) {
+            err = httpd_resp_send_chunk(req, (const char *)f->buf, f->len);
+        }
+        cam_mgr_frame_release(f);
+        if (err != ESP_OK) {
+            break;
+        }
+    }
+
+    cam_mgr_consumer_remove();
+    if (__atomic_sub_fetch(&s_stream_clients, 1, __ATOMIC_SEQ_CST) == 0) {
+        status_led_set_streaming(false);
+    }
+    ESP_LOGI(TAG, "stream client left (%d active)", s_stream_clients);
+    httpd_req_async_handler_complete(req);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t stream_get(httpd_req_t *req)
+{
+    if (s_stream_clients >= MAX_STREAM_CLIENTS) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "too many stream clients");
+    }
+    httpd_req_t *async;
+    esp_err_t err = httpd_req_async_handler_begin(req, &async);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (xTaskCreate(stream_task, "mjpeg", 4096, async, 5, NULL) != pdPASS) {
+        httpd_req_async_handler_complete(async);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+/* ------------------------------------------------------------------ setup ----------------- */
+
+static void reg(httpd_handle_t h, const char *uri, httpd_method_t m, esp_err_t (*fn)(httpd_req_t *))
+{
+    httpd_uri_t u = {.uri = uri, .method = m, .handler = fn};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(h, &u));
+}
+
+esp_err_t web_server_start(void)
+{
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.server_port = 80;
+    cfg.ctrl_port = 32768;
+    cfg.max_uri_handlers = 32;
+    cfg.max_open_sockets = 7;
+    cfg.lru_purge_enable = true;
+    cfg.stack_size = 8192;
+    cfg.core_id = 0;
+    ESP_ERROR_CHECK(httpd_start(&s_api, &cfg));
+
+    reg(s_api, "/", HTTP_GET, index_get);
+    reg(s_api, "/capture", HTTP_GET, snapshot_get);
+    reg(s_api, "/api/snapshot", HTTP_GET, snapshot_get);
+    reg(s_api, "/api/status", HTTP_GET, status_get);
+    reg(s_api, "/api/system", HTTP_GET, system_get);
+    reg(s_api, "/api/system", HTTP_POST, system_post);
+    reg(s_api, "/api/telemetry", HTTP_GET, telemetry_get);
+    reg(s_api, "/api/reboot", HTTP_POST, reboot_post);
+    reg(s_api, "/api/time", HTTP_POST, time_post);
+    reg(s_api, "/api/factory-reset", HTTP_POST, factory_reset_post);
+    reg(s_api, "/api/camera", HTTP_GET, camera_get);
+    reg(s_api, "/api/camera", HTTP_POST, camera_post);
+    reg(s_api, "/api/camera/save", HTTP_POST, camera_save_post);
+    reg(s_api, "/api/camera/defaults", HTTP_POST, camera_defaults_post);
+    reg(s_api, "/api/camera/af", HTTP_POST, camera_af_post);
+    reg(s_api, "/api/wifi", HTTP_GET, wifi_get);
+    reg(s_api, "/api/wifi", HTTP_POST, wifi_post);
+    reg(s_api, "/api/wifi/scan", HTTP_GET, wifi_scan_get);
+    reg(s_api, "/api/mqtt", HTTP_GET, mqtt_get);
+    reg(s_api, "/api/mqtt", HTTP_POST, mqtt_post);
+    reg(s_api, "/api/mqtt/discovery", HTTP_POST, mqtt_discovery_post);
+    httpd_uri_t ws = {.uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(s_api, &ws));
+    httpd_register_err_handler(s_api, HTTPD_404_NOT_FOUND, not_found);
+
+    httpd_config_t scfg = HTTPD_DEFAULT_CONFIG();
+    scfg.server_port = 81;
+    scfg.ctrl_port = 32769;
+    scfg.max_uri_handlers = 2;
+    scfg.max_open_sockets = MAX_STREAM_CLIENTS + 1;
+    scfg.stack_size = 4096;
+    scfg.core_id = 0;
+    ESP_ERROR_CHECK(httpd_start(&s_stream, &scfg));
+    reg(s_stream, "/stream", HTTP_GET, stream_get);
+
+    xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, NULL);
+    ESP_LOGI(TAG, "web UI on port 80, MJPEG stream on port 81");
+    return ESP_OK;
+}

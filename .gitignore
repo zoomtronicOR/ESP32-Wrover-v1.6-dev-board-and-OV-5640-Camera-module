@@ -1,0 +1,12 @@
+.pio/
+.vscode/
+managed_components/
+dependencies.lock
+sdkconfig.wrover
+sdkconfig.old
+build/
+
+# Local-only docs (not published)
+CLAUDE.md
+ESP32_WROVER_OV5640_Advanced_Camera_HA_Specifikacija.md
+PREDLOZI.md

@@ -1,0 +1,73 @@
+menu "ESP32 Camera board"
+
+    comment "Camera pins (default: ESP32-WROVER-DEV / Freenove / WROVER-KIT layout)"
+
+    config CAM_PIN_PWDN
+        int "PWDN GPIO (-1 = not connected)"
+        range -1 39
+        default -1
+    config CAM_PIN_RESET
+        int "RESET GPIO (-1 = not connected)"
+        range -1 39
+        default -1
+    config CAM_PIN_XCLK
+        int "XCLK GPIO"
+        default 21
+    config CAM_PIN_SIOD
+        int "SIOD (SCCB SDA) GPIO"
+        default 26
+    config CAM_PIN_SIOC
+        int "SIOC (SCCB SCL) GPIO"
+        default 27
+    config CAM_PIN_D7
+        int "D7 (Y9) GPIO"
+        default 35
+    config CAM_PIN_D6
+        int "D6 (Y8) GPIO"
+        default 34
+    config CAM_PIN_D5
+        int "D5 (Y7) GPIO"
+        default 39
+    config CAM_PIN_D4
+        int "D4 (Y6) GPIO"
+        default 36
+    config CAM_PIN_D3
+        int "D3 (Y5) GPIO"
+        default 19
+    config CAM_PIN_D2
+        int "D2 (Y4) GPIO"
+        default 18
+    config CAM_PIN_D1
+        int "D1 (Y3) GPIO"
+        default 5
+    config CAM_PIN_D0
+        int "D0 (Y2) GPIO"
+        default 4
+    config CAM_PIN_VSYNC
+        int "VSYNC GPIO"
+        default 25
+    config CAM_PIN_HREF
+        int "HREF GPIO"
+        default 23
+    config CAM_PIN_PCLK
+        int "PCLK GPIO"
+        default 22
+
+    config CAM_XCLK_MHZ_DEFAULT
+        int "Default XCLK frequency (MHz)"
+        range 6 24
+        default 20
+
+    config STATUS_LED_GPIO
+        int "Status LED GPIO (-1 = none)"
+        range -1 33
+        default 2
+    config STATUS_LED_ACTIVE_HIGH
+        bool "Status LED is active-high"
+        default y
+
+    config SETUP_AP_PASSWORD
+        string "Password of the setup access point (min 8 chars)"
+        default "esp32camera"
+
+endmenu

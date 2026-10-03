@@ -1,0 +1,11 @@
+idf_component_register(SRCS "main.c"
+                            "mqtt_mgr.c"
+                            "app_config.c"
+                            "camera_mgr.c"
+                            "console_cmds.c"
+                            "status_led.c"
+                            "sysmon.c"
+                            "web_server.c"
+                            "wifi_mgr.c"
+                       INCLUDE_DIRS "."
+                       EMBED_TXTFILES "web/index.html")
