@@ -352,6 +352,15 @@ static void publish_discovery(void)
     announce("switch", "ai_detection", aisw);
     add_sensor("last_object", "Last detected object", "{{ value_json.last_object }}", NULL, NULL, false);
 
+    // Vision-LLM event description (HA state is limited to 255 characters; full text in attributes).
+    cJSON *desc = entity("last_description", "Last description", NULL);
+    topic(t, "description");
+    cJSON_AddStringToObject(desc, "state_topic", t);
+    cJSON_AddStringToObject(desc, "value_template", "{{ value_json.description[:250] }}");
+    cJSON_AddStringToObject(desc, "json_attributes_topic", t);
+    cJSON_AddStringToObject(desc, "icon", "mdi:text-box-search-outline");
+    announce("sensor", "last_description", desc);
+
     for (int i = 0; i < AI_MAX_LABELS; i++) {
         char object[16], label[16], name[24], tt[TOPIC_LEN];
         snprintf(object, sizeof(object), "object_%d", i + 1);

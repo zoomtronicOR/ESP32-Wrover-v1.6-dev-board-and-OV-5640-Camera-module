@@ -40,6 +40,7 @@ typedef struct {
     uint32_t uptime_s;
     uint8_t *jpg;
     size_t jpg_len;
+    char desc[EVENT_DESC_LEN];  // AI description, filled in later
 } record_t;
 
 static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
@@ -58,7 +59,8 @@ static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
 
 static QueueHandle_t s_queue;
 static SemaphoreHandle_t s_lock;
-static record_t s_ring[EVENTS_MAX];
+static record_t *s_ring;  // EVENTS_MAX records in PSRAM
+static event_listener_t s_listener;
 static int s_head;  // next slot to write
 static uint32_t s_next_id = 1;
 static uint32_t s_today[EV_TYPE_COUNT];
@@ -111,6 +113,9 @@ static cJSON *record_json(const record_t *r)
     if (r->jpg) {
         snprintf(buf, sizeof(buf), "/api/events/snapshot?id=%lu", (unsigned long)r->id);
         cJSON_AddStringToObject(o, "snapshot", buf);
+    }
+    if (r->desc[0]) {
+        cJSON_AddStringToObject(o, "description", r->desc);
     }
     return o;
 }
@@ -190,11 +195,18 @@ static void dispatch_task(void *arg)
         cJSON_AddStringToObject(j, "type", "event");
         web_ws_broadcast_json(j);
         cJSON_Delete(j);
+        if (s_listener) {
+            s_listener(r->id, p.type, jpg != NULL);
+        }
     }
 }
 
 esp_err_t event_mgr_init(void)
 {
+    s_ring = heap_caps_calloc(EVENTS_MAX, sizeof(record_t), MALLOC_CAP_SPIRAM);
+    if (!s_ring) {
+        return ESP_ERR_NO_MEM;
+    }
     s_lock = xSemaphoreCreateMutex();
     s_queue = xQueueCreate(QUEUE_LEN, sizeof(pending_t));
     xTaskCreate(dispatch_task, "events", 4096, NULL, 3, NULL);
@@ -258,6 +270,39 @@ void event_clear(void)
     }
     s_head = 0;
     xSemaphoreGive(s_lock);
+}
+
+void event_set_listener(event_listener_t cb)
+{
+    s_listener = cb;
+}
+
+esp_err_t event_set_description(uint32_t id, const char *text)
+{
+    cJSON *j = NULL;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < EVENTS_MAX; i++) {
+        record_t *r = &s_ring[i];
+        if (r->id == id) {
+            strlcpy(r->desc, text, sizeof(r->desc));
+            j = record_json(r);
+            break;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    if (!j) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    // MQTT: <base>/description (retained) so HA can show / notify the latest description.
+    char *txt = cJSON_PrintUnformatted(j);
+    if (txt) {
+        mqtt_mgr_publish_state("description", txt, true);
+        cJSON_free(txt);
+    }
+    cJSON_AddStringToObject(j, "type", "description");
+    web_ws_broadcast_json(j);
+    cJSON_Delete(j);
+    return ESP_OK;
 }
 
 uint32_t event_count_today(event_type_t type)

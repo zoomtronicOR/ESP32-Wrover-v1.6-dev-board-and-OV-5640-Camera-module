@@ -40,3 +40,10 @@ esp_err_t event_snapshot_copy(uint32_t id, uint8_t **buf, size_t *len);
 void event_clear(void);
 // Counters since local midnight (or boot if time is not synced).
 uint32_t event_count_today(event_type_t type);
+
+#define EVENT_DESC_LEN 384
+// Called from the dispatcher after an event has been stored (used by the LLM describer).
+typedef void (*event_listener_t)(uint32_t id, event_type_t type, bool has_snapshot);
+void event_set_listener(event_listener_t cb);
+// Attaches an AI description to a stored event and re-publishes it (WebSocket + MQTT).
+esp_err_t event_set_description(uint32_t id, const char *text);

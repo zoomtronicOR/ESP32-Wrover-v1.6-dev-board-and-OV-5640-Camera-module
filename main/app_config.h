@@ -9,6 +9,7 @@
 #define NVS_NS_WIFI       "wifi"
 #define NVS_NS_MQTT       "mqtt"
 #define NVS_NS_AI         "ai"
+#define NVS_NS_LLM        "llm"
 #define NVS_NS_MOTION     "motion"
 #define NVS_NS_STORAGE    "storage"
 #define NVS_NS_SECURITY   "security"

@@ -116,7 +116,7 @@ esp_err_t app_config_save_system(void)
 esp_err_t app_config_factory_reset(bool include_wifi)
 {
     static const char *const namespaces[] = {
-        NVS_NS_CAMERA, NVS_NS_MQTT, NVS_NS_AI, NVS_NS_MOTION, NVS_NS_STORAGE,
+        NVS_NS_CAMERA, NVS_NS_MQTT, NVS_NS_AI, NVS_NS_LLM, NVS_NS_MOTION, NVS_NS_STORAGE,
         NVS_NS_SECURITY, NVS_NS_SYSTEM, NVS_NS_AUTOMATION, NVS_NS_WIFI,
     };
     size_t n = sizeof(namespaces) / sizeof(namespaces[0]);

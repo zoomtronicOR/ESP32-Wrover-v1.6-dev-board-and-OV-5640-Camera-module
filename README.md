@@ -52,6 +52,8 @@ Wi-Fi se može podesiti i preko serijske konzole: `wifi <ssid> <lozinka>`.
 | GET | `/api/motion/debug` | Mreža razlika (heatmap) za podešavanje osetljivosti |
 | GET/POST | `/api/ai` | Podešavanja i stanje eksternog AI-ja |
 | POST | `/api/ai/test` | Jedna inferencija odmah (objekti + analizirani frame) |
+| GET/POST | `/api/llm` | Podešavanja AI opisa (vision LLM) |
+| POST | `/api/llm/test` | Opis trenutne slike (rezultat stiže u status) |
 | GET | `/api/events` | Dnevnik događaja (`?limit=N`) |
 | GET | `/api/events/snapshot?id=N` | Snapshot događaja |
 | POST | `/api/events/clear` | Briše događaje |
@@ -73,6 +75,7 @@ Podešava se na tabu **MQTT / HA**. Topici imaju oblik `camera/<device>/…`, gd
 | `motion`, `motion/zoneN` | `ON` / `OFF` (retained) |
 | `motion/set` | `ON` / `OFF`: uključuje ili isključuje detekciju pokreta |
 | `person`, `car`, … | JSON po praćenoj klasi: `{"detected":true,"confidence":0.92,"x","y","width","height","zone","timestamp"}` (retained) |
+| `description` | JSON poslednjeg događaja sa AI opisom (retained) |
 | `ai/set` | `ON` / `OFF`: uključuje ili isključuje AI; komande `ai_on` / `ai_off` na `command` |
 | `camera/set` | JSON podešavanja kamere, npr. `{"vflip":1,"quality":10}` |
 
@@ -97,6 +100,14 @@ Klasični ESP32 je preslab za ozbiljnu lokalnu detekciju objekata (spec §42). Z
   - CodeProject.AI / DeepStack: URL `http://<host>:32168/v1/vision/detection`, API „DeepStack“.
 - **Praćenje:** objekat se prijavljuje kao `object_detected` tek kad je viđen iznad *enter* praga tokom *persistence* vremena. Ostaje prisutan dok je iznad *keep* praga, a `object_left` stiže posle *left after* vremena bez detekcije (spec §60).
 
+## AI opis događaja (Ollama / Open WebUI)
+
+Kamera može da pošalje snapshot događaja (pokret ili AI objekat) vision modelu i da opis u jednoj rečenici priloži događaju. Opis se vidi u Events tabu, na MQTT-u `…/description` i u HA senzoru „Last description“, pa se može koristiti u obaveštenjima.
+- **Ollama:** URL `http://<host>:11434/api/chat`, a model mora biti vision, npr. `qwen2.5vl:3b`, `gemma3:4b` ili `llava`.
+- **Open WebUI / OpenAI API:** URL `http://<host>:3000/api/chat/completions` (ili Ollama `/v1/chat/completions`) i API ključ.
+
+Šalje se samo jedna slika po događaju, uz cooldown, pa i spori CPU modeli rade.
+
 ## Status razvoja
 
 - [x] **Faza 1, kamera:** OV5640 init, PSRAM, JPEG, snapshot, MJPEG stream, watchdog kamere (restart drajvera)
@@ -105,6 +116,7 @@ Klasični ESP32 je preslab za ozbiljnu lokalnu detekciju objekata (spec §42). Z
 - [x] **Faza 4, detekcija pokreta:** razlika frame-ova sa kompenzacijom osvetljenja, do 4 zone, event engine sa snapshot-ima, HA binary senzori
 - [ ] Faza 5: lokalni AI (ESP-DL)
 - [ ] Faza 6: microSD, timelapse, pregled događaja
+- [x] **AI opis događaja** preko vision LLM-a (Ollama / Open WebUI)
 - [x] **Faza 7, eksterni AI:** HTTP AI server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom, HA senzori po klasi, okviri na Live View-u
 - [ ] Faza 8: sigurnost (auth, API tokeni, zaštita OTA, TLS)
 

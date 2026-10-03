@@ -8,6 +8,7 @@
 #include "esp_ota_ops.h"
 #include "ai_mgr.h"
 #include "event_mgr.h"
+#include "llm_mgr.h"
 #include "motion_mgr.h"
 #include "mqtt_mgr.h"
 #include "status_led.h"
@@ -39,6 +40,7 @@ void app_main(void)
     mqtt_mgr_init();
     motion_mgr_init();
     ai_mgr_init();
+    llm_mgr_init();
     web_server_start();
     console_cmds_start();
 
