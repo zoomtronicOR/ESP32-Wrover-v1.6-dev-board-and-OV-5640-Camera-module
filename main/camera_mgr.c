@@ -271,8 +271,12 @@ static void adapt_to_sensor(sensor_t *s)
         // Default chosen on this installation (user preference): ~12.5x, less noise than the full range.
         s_def[P_GAINCEILING] = 200;
     }
+    // Values outside this sensor's range (e.g. a generic default, or a value saved for another
+    // sensor) fall back to the sensor default rather than being clamped to an edge of the range.
     for (int i = 0; i < P_COUNT; i++) {
-        s_val[i] = clamp_param(i, s_val[i]);
+        if (s_val[i] < s_min[i] || s_val[i] > s_max[i]) {
+            s_val[i] = s_def[i];
+        }
     }
 }
 
@@ -651,8 +655,11 @@ esp_err_t cam_mgr_init(void)
         s_val[i] = s_def[i];
     }
     load_saved_values();
-    for (int i = 0; i < P_COUNT; i++) {
-        s_val[i] = clamp_param(i, s_val[i]);
+    // Only driver-init parameters are validated here; sensor ranges are known after detection
+    // (adapt_to_sensor), so saved sensor values must not be clamped to the generic ranges yet.
+    static const int init_params[] = {P_XCLK, P_FB_COUNT, P_GRAB_LATEST, P_QUALITY, P_FRAMESIZE};
+    for (size_t k = 0; k < sizeof(init_params) / sizeof(init_params[0]); k++) {
+        s_val[init_params[k]] = clamp_param(init_params[k], s_val[init_params[k]]);
     }
 
     xSemaphoreTake(s_drv_lock, portMAX_DELAY);
