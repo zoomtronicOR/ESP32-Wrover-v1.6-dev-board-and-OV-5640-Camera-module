@@ -756,6 +756,12 @@ esp_err_t cam_mgr_init(void)
 
     xSemaphoreTake(s_drv_lock, portMAX_DELAY);
     s_ok = (driver_start() == ESP_OK);
+    // Nobody is watching at boot: power the sensor down right away so Wi-Fi start-up (RF
+    // calibration pulls 400-500 mA peaks) does not coincide with a streaming OV5640. On a weak
+    // supply that combination browned the board out in a loop. It wakes on the first consumer.
+    if (s_ok && s_val[P_STANDBY]) {
+        sensor_standby(true);
+    }
     xSemaphoreGive(s_drv_lock);
 
     // Capture has the highest application priority (spec §40).
