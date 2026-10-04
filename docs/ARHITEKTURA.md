@@ -53,15 +53,15 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Podržane su dve
 
 ## Memorija i particije
 
-| Particija | Veličina | Namena |
-|---|---|---|
-| `nvs` | 24 KB | sva podešavanja (namespace-i: camera, wifi, mqtt, ai, llm, person, motion, security, system, diag…) |
-| `otadata` | 8 KB | koji OTA slot je aktivan |
-| `ota_0`, `ota_1` | 2 × 3 MB | firmware (A/B, rollback ako novi firmware ne može da se pokrene) |
-| `coredump` | 64 KB | zapis o padu |
-| `storage` | 1,8 MB | rezervisano (snapshot-i/timelapse bez SD kartice) |
+| Particija | WROVER (`partitions.csv`, 8 MB) | ESP32-CAM (`partitions_4mb.csv`, 4 MB) | Namena |
+|---|---|---|---|
+| `nvs` | 24 KB | 24 KB | sva podešavanja (namespace-i: camera, wifi, mqtt, ai, llm, person, motion, storage, security, system, diag…) |
+| `otadata` | 8 KB | 8 KB | koji OTA slot je aktivan |
+| `ota_0`, `ota_1` | 2 × 3 MB | 2 × 1,875 MB | firmware (A/B, rollback ako novi firmware ne može da se pokrene) |
+| `coredump` | 64 KB | 64 KB | zapis o padu |
+| `storage` | 1,8 MB | — | neiskorišćeno na WROVER-u; ESP32-CAM snima na microSD karticu |
 
-PSRAM (4 MB): ~2 MB JPEG bafera kamere (inicijalizovani za 5 MP), frame hub, dnevnik događaja sa snapshot-ima, baferi za detekciju pokreta, radna memorija TFLite modela (160 KB).
+PSRAM (4 MB): JPEG baferi kamere (inicijalizovani za 5 MP na OV5640, odnosno UXGA na OV2640), frame hub, dnevnik događaja sa snapshot-ima, baferi za detekciju pokreta, radna memorija TFLite modela (160 KB).
 
 ## Dodavanje novog podešavanja kamere
 
