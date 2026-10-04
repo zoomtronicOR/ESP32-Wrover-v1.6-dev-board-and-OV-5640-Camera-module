@@ -1,0 +1,72 @@
+{
+ "config": {
+  "enabled": false,
+  "fps": 3,
+  "sensitivity": 60,
+  "min_area": 15,
+  "trigger_frames": 2,
+  "cooldown_s": 10,
+  "snapshot": true,
+  "mqtt_snapshot": true,
+  "tamper": true,
+  "line": {
+   "x1": 827,
+   "y1": 58,
+   "x2": 833,
+   "y2": 998,
+   "invert": false
+  },
+  "zones": [
+   {
+    "name": "Zone 1",
+    "x": 30,
+    "y": 84,
+    "w": 317,
+    "h": 480
+   },
+   {
+    "name": "Zone 2",
+    "x": 40,
+    "y": 704,
+    "w": 315,
+    "h": 274
+   }
+  ]
+ },
+ "state": {
+  "enabled": false,
+  "active": false,
+  "changed_pct": 0,
+  "analysed": 1137,
+  "scene_changes": 0,
+  "analyse_ms": 368,
+  "events_today": 0,
+  "line": {
+   "enabled": true,
+   "in": 0,
+   "out": 0,
+   "last": ""
+  },
+  "tamper": {
+   "enabled": true,
+   "state": "ok",
+   "reason": "",
+   "edge_pct": 98,
+   "lost_pct": 25,
+   "ref_age_s": 54,
+   "alarms": 0
+  },
+  "zones": [
+   {
+    "name": "Zone 1",
+    "active": false,
+    "pct": 0
+   },
+   {
+    "name": "Zone 2",
+    "active": false,
+    "pct": 0
+   }
+  ]
+ }
+}

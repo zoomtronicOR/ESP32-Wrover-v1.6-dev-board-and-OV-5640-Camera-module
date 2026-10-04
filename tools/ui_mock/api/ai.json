@@ -1,0 +1,57 @@
+{
+ "config": {
+  "enabled": false,
+  "mode": 1,
+  "api": 0,
+  "url": "",
+  "has_token": false,
+  "interval_ms": 1000,
+  "timeout_ms": 5000,
+  "enter_conf": 75,
+  "keep_conf": 60,
+  "persist_ms": 1000,
+  "absent_ms": 5000,
+  "labels": "person,car,dog,cat",
+  "snapshot": true,
+  "mqtt_snapshot": true
+ },
+ "state": {
+  "state": "off",
+  "last_error": "",
+  "inferences": 0,
+  "errors": 0,
+  "latency_ms": 0,
+  "fps": 0,
+  "last_object": "",
+  "objects": [
+   {
+    "label": "person",
+    "present": false,
+    "count": 0,
+    "confidence": 0,
+    "today": 0
+   },
+   {
+    "label": "car",
+    "present": false,
+    "count": 0,
+    "confidence": 0,
+    "today": 0
+   },
+   {
+    "label": "dog",
+    "present": false,
+    "count": 0,
+    "confidence": 0,
+    "today": 0
+   },
+   {
+    "label": "cat",
+    "present": false,
+    "count": 0,
+    "confidence": 0,
+    "today": 0
+   }
+  ]
+ }
+}

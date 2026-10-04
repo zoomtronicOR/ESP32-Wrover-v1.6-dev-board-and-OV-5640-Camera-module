@@ -1,0 +1,61 @@
+{
+ "camera": {
+  "sensor": "OV5640",
+  "pid": "0x5640",
+  "ok": true,
+  "standby": false,
+  "xclk_mhz": 20,
+  "fb_count": 2,
+  "fps": 8.6,
+  "frames": 3996,
+  "grab_errors": 0,
+  "driver_restarts": 0,
+  "last_frame_bytes": 83571,
+  "frame_pool": {
+   "slots": 4,
+   "in_use": 2,
+   "psram_bytes": 393216
+  },
+  "live": {
+   "exposure_lines": 885,
+   "exposure_pct_of_frame": 89.9,
+   "analog_gain": 12.5,
+   "vts": 984,
+   "hts": 2644,
+   "avg_luma": 21,
+   "awb_gain": {
+    "r": 1.5,
+    "g": 1,
+    "b": 1.3
+   },
+   "aec_manual": false,
+   "agc_manual": false,
+   "light_flicker": "50 Hz",
+   "night_mode": false,
+   "output_size": "1024x768",
+   "light_index": 1.8
+  }
+ },
+ "module": {
+  "mac": "24:0a:c4:12:34:56",
+  "wifi_tx_power_dbm": 19.5,
+  "wifi_phy": "HT20 (11n)",
+  "heap_total": 324271,
+  "dma_heap_total": 312479,
+  "dma_heap_free": 46703,
+  "dma_heap_largest": 31744,
+  "psram_min_free": 1415852,
+  "nvs": {
+   "used_entries": 190,
+   "free_entries": 566,
+   "namespaces": 12
+  },
+  "ota": {
+   "running": "ota_0",
+   "app_size": 1807136,
+   "partition_size": 3145728,
+   "next": "ota_1",
+   "state": "valid"
+  }
+ }
+}

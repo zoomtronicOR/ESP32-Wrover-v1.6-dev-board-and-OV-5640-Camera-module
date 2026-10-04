@@ -1,0 +1,10 @@
+{
+ "running": "ota_0",
+ "version": "0.1.0",
+ "next": "ota_1",
+ "max_size": 3145728,
+ "rollback_possible": true,
+ "other_version": "0.1.0",
+ "other_build": "Oct  3 2026 23:52:00",
+ "allowed": true
+}

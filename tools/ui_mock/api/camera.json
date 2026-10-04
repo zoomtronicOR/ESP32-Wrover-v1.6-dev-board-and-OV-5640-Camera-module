@@ -1,0 +1,535 @@
+{
+ "sensor": {
+  "name": "OV5640",
+  "pid": 22080,
+  "ok": true,
+  "af": {
+   "supported": true,
+   "ready": true,
+   "focused": false,
+   "busy": true,
+   "raw": 32
+  }
+ },
+ "params": [
+  {
+   "id": "framesize",
+   "label": "Resolution",
+   "group": "stream",
+   "type": "enum",
+   "min": 0,
+   "max": 23,
+   "def": 11,
+   "value": 12,
+   "supported": true,
+   "options": [
+    {
+     "v": 0,
+     "name": "96X96 96x96"
+    },
+    {
+     "v": 1,
+     "name": "QQVGA 160x120"
+    },
+    {
+     "v": 2,
+     "name": "128X128 128x128"
+    },
+    {
+     "v": 3,
+     "name": "QCIF 176x144"
+    },
+    {
+     "v": 4,
+     "name": "HQVGA 240x176"
+    },
+    {
+     "v": 5,
+     "name": "240X240 240x240"
+    },
+    {
+     "v": 6,
+     "name": "QVGA 320x240"
+    },
+    {
+     "v": 7,
+     "name": "320X320 320x320"
+    },
+    {
+     "v": 8,
+     "name": "CIF 400x296"
+    },
+    {
+     "v": 9,
+     "name": "HVGA 480x320"
+    },
+    {
+     "v": 10,
+     "name": "VGA 640x480"
+    },
+    {
+     "v": 11,
+     "name": "SVGA 800x600"
+    },
+    {
+     "v": 12,
+     "name": "XGA 1024x768"
+    },
+    {
+     "v": 13,
+     "name": "HD 1280x720"
+    },
+    {
+     "v": 14,
+     "name": "SXGA 1280x1024"
+    },
+    {
+     "v": 15,
+     "name": "UXGA 1600x1200"
+    },
+    {
+     "v": 16,
+     "name": "FHD 1920x1080"
+    },
+    {
+     "v": 17,
+     "name": "P_HD 720x1280"
+    },
+    {
+     "v": 18,
+     "name": "P_3MP 864x1536"
+    },
+    {
+     "v": 19,
+     "name": "QXGA 2048x1536"
+    },
+    {
+     "v": 20,
+     "name": "QHD 2560x1440"
+    },
+    {
+     "v": 21,
+     "name": "WQXGA 2560x1600"
+    },
+    {
+     "v": 22,
+     "name": "P_FHD 1088x1920"
+    },
+    {
+     "v": 23,
+     "name": "QSXGA 2560x1920"
+    }
+   ]
+  },
+  {
+   "id": "quality",
+   "label": "JPEG quality (lower = better)",
+   "group": "stream",
+   "type": "range",
+   "min": 4,
+   "max": 63,
+   "def": 12,
+   "value": 6,
+   "supported": true
+  },
+  {
+   "id": "fps_limit",
+   "label": "FPS limit (0 = unlimited)",
+   "group": "stream",
+   "type": "range",
+   "min": 0,
+   "max": 30,
+   "def": 15,
+   "value": 15,
+   "supported": true
+  },
+  {
+   "id": "standby",
+   "label": "Sensor standby when idle",
+   "group": "stream",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "brightness",
+   "label": "Brightness",
+   "group": "image",
+   "type": "range",
+   "min": -3,
+   "max": 3,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "contrast",
+   "label": "Contrast",
+   "group": "image",
+   "type": "range",
+   "min": -3,
+   "max": 3,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "saturation",
+   "label": "Saturation",
+   "group": "image",
+   "type": "range",
+   "min": -4,
+   "max": 4,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "sharpness",
+   "label": "Sharpness",
+   "group": "image",
+   "type": "range",
+   "min": -3,
+   "max": 3,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "denoise",
+   "label": "Denoise",
+   "group": "image",
+   "type": "range",
+   "min": 0,
+   "max": 8,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "special_effect",
+   "label": "Special effect",
+   "group": "image",
+   "type": "enum",
+   "min": 0,
+   "max": 6,
+   "def": 0,
+   "value": 0,
+   "supported": true,
+   "options": [
+    {
+     "v": 0,
+     "name": "None"
+    },
+    {
+     "v": 1,
+     "name": "Negative"
+    },
+    {
+     "v": 2,
+     "name": "Grayscale"
+    },
+    {
+     "v": 3,
+     "name": "Red tint"
+    },
+    {
+     "v": 4,
+     "name": "Green tint"
+    },
+    {
+     "v": 5,
+     "name": "Blue tint"
+    },
+    {
+     "v": 6,
+     "name": "Sepia"
+    }
+   ]
+  },
+  {
+   "id": "hmirror",
+   "label": "Horizontal mirror",
+   "group": "image",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "vflip",
+   "label": "Vertical flip",
+   "group": "image",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 0,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "colorbar",
+   "label": "Test colorbar",
+   "group": "image",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "exposure_ctrl",
+   "label": "Auto exposure (AEC)",
+   "group": "exposure",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "aec2",
+   "label": "AEC DSP",
+   "group": "exposure",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "ae_level",
+   "label": "AE level",
+   "group": "exposure",
+   "type": "range",
+   "min": -5,
+   "max": 5,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "aec_value",
+   "label": "Manual exposure",
+   "group": "exposure",
+   "type": "range",
+   "min": 0,
+   "max": 2000,
+   "def": 300,
+   "value": 300,
+   "supported": true
+  },
+  {
+   "id": "gain_ctrl",
+   "label": "Auto gain (AGC)",
+   "group": "exposure",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "agc_gain",
+   "label": "Manual gain",
+   "group": "exposure",
+   "type": "range",
+   "min": 0,
+   "max": 64,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "gainceiling",
+   "label": "Gain ceiling",
+   "group": "exposure",
+   "type": "range",
+   "min": 16,
+   "max": 1023,
+   "def": 200,
+   "value": 200,
+   "supported": true
+  },
+  {
+   "id": "whitebal",
+   "label": "Auto white balance",
+   "group": "wb",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "awb_gain",
+   "label": "AWB gain",
+   "group": "wb",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "wb_mode",
+   "label": "WB mode",
+   "group": "wb",
+   "type": "enum",
+   "min": 0,
+   "max": 4,
+   "def": 0,
+   "value": 0,
+   "supported": true,
+   "options": [
+    {
+     "v": 0,
+     "name": "Auto"
+    },
+    {
+     "v": 1,
+     "name": "Sunny"
+    },
+    {
+     "v": 2,
+     "name": "Cloudy"
+    },
+    {
+     "v": 3,
+     "name": "Office"
+    },
+    {
+     "v": 4,
+     "name": "Home"
+    }
+   ]
+  },
+  {
+   "id": "bpc",
+   "label": "Black pixel correction",
+   "group": "dsp",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 0,
+   "value": 0,
+   "supported": true
+  },
+  {
+   "id": "wpc",
+   "label": "White pixel correction",
+   "group": "dsp",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "raw_gma",
+   "label": "Raw gamma",
+   "group": "dsp",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "lenc",
+   "label": "Lens correction",
+   "group": "dsp",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "dcw",
+   "label": "Downsize (DCW)",
+   "group": "dsp",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true
+  },
+  {
+   "id": "af_mode",
+   "label": "Autofocus",
+   "group": "focus",
+   "type": "enum",
+   "min": 0,
+   "max": 2,
+   "def": 0,
+   "value": 1,
+   "supported": true,
+   "options": [
+    {
+     "v": 0,
+     "name": "Off"
+    },
+    {
+     "v": 1,
+     "name": "Continuous"
+    },
+    {
+     "v": 2,
+     "name": "Single (trigger)"
+    }
+   ]
+  },
+  {
+   "id": "xclk_mhz",
+   "label": "XCLK (MHz)",
+   "group": "init",
+   "type": "range",
+   "min": 6,
+   "max": 24,
+   "def": 20,
+   "value": 20,
+   "supported": true,
+   "restart": true
+  },
+  {
+   "id": "fb_count",
+   "label": "Frame buffers",
+   "group": "init",
+   "type": "range",
+   "min": 1,
+   "max": 3,
+   "def": 2,
+   "value": 2,
+   "supported": true,
+   "restart": true
+  },
+  {
+   "id": "grab_latest",
+   "label": "Grab latest frame",
+   "group": "init",
+   "type": "bool",
+   "min": 0,
+   "max": 1,
+   "def": 1,
+   "value": 1,
+   "supported": true,
+   "restart": true
+  }
+ ]
+}

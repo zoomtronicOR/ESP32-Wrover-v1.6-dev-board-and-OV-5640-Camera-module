@@ -1,0 +1,10 @@
+{
+ "enabled": true,
+ "user": "admin",
+ "has_password": true,
+ "default_password": true,
+ "session_min": 60,
+ "token": "0f3a9c2e7b1d4f6a8c5e2b9d7f1a3c6e",
+ "custom_ap_password": false,
+ "locked_s": 0
+}

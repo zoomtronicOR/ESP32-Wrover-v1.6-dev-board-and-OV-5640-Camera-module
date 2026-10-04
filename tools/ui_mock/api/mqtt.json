@@ -1,0 +1,21 @@
+{
+ "enabled": true,
+ "host": "192.168.1.10",
+ "port": 1883,
+ "user": "mqtt_user",
+ "has_password": true,
+ "client_id": "esp32_camera_3456",
+ "base": "camera",
+ "discovery": true,
+ "disc_prefix": "homeassistant",
+ "qos": 0,
+ "retain": true,
+ "keepalive": 30,
+ "telemetry_s": 30,
+ "snapshot_s": 0,
+ "state": "ok",
+ "ha_state": "ok",
+ "last_error": "",
+ "device_id": "esp32_camera_3456",
+ "topic_base": "camera/esp32_camera_3456"
+}

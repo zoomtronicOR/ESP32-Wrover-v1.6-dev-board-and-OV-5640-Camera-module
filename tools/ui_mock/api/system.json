@@ -1,0 +1,175 @@
+{
+ "device_name": "ESP32 Camera",
+ "firmware": "0.1.0",
+ "project": "esp32_camera",
+ "build_date": "Oct  4 2026 16:02:43",
+ "idf_version": "5.3.2.250210",
+ "chip": "esp32",
+ "chip_revision": 1,
+ "cores": 2,
+ "cpu_mhz": 240,
+ "flash_size": 8388608,
+ "app_partition_size": 3145728,
+ "app_partition": "ota_0",
+ "heap_free": 60339,
+ "heap_min": 27903,
+ "heap_largest": 31744,
+ "psram_total": 4194304,
+ "psram_free": 1433552,
+ "psram_largest": 1409024,
+ "uptime_s": 426,
+ "reset_reason": "power-on",
+ "boot_count": 61,
+ "tasks": [
+  {
+   "name": "httpd",
+   "prio": 5,
+   "stack_free": 5244,
+   "core": 0
+  },
+  {
+   "name": "motion",
+   "prio": 4,
+   "stack_free": 4996,
+   "core": 1
+  },
+  {
+   "name": "IDLE0",
+   "prio": 0,
+   "stack_free": 924,
+   "core": 0
+  },
+  {
+   "name": "IDLE1",
+   "prio": 0,
+   "stack_free": 916,
+   "core": 1
+  },
+  {
+   "name": "tiT",
+   "prio": 18,
+   "stack_free": 1916,
+   "core": -1
+  },
+  {
+   "name": "status_led",
+   "prio": 1,
+   "stack_free": 1464,
+   "core": -1
+  },
+  {
+   "name": "person",
+   "prio": 3,
+   "stack_free": 7568,
+   "core": 1
+  },
+  {
+   "name": "mqtt_task",
+   "prio": 5,
+   "stack_free": 3940,
+   "core": -1
+  },
+  {
+   "name": "mdns",
+   "prio": 1,
+   "stack_free": 2208,
+   "core": 0
+  },
+  {
+   "name": "mqtt_worker",
+   "prio": 4,
+   "stack_free": 3280,
+   "core": 1
+  },
+  {
+   "name": "sysmon",
+   "prio": 2,
+   "stack_free": 2468,
+   "core": 0
+  },
+  {
+   "name": "ws_push",
+   "prio": 3,
+   "stack_free": 1992,
+   "core": 0
+  },
+  {
+   "name": "llm",
+   "prio": 2,
+   "stack_free": 4696,
+   "core": 1
+  },
+  {
+   "name": "cam_capture",
+   "prio": 6,
+   "stack_free": 3420,
+   "core": 1
+  },
+  {
+   "name": "ai",
+   "prio": 3,
+   "stack_free": 5164,
+   "core": 1
+  },
+  {
+   "name": "httpd",
+   "prio": 5,
+   "stack_free": 3192,
+   "core": 0
+  },
+  {
+   "name": "console_repl",
+   "prio": 2,
+   "stack_free": 2864,
+   "core": -1
+  },
+  {
+   "name": "events",
+   "prio": 3,
+   "stack_free": 1872,
+   "core": 0
+  },
+  {
+   "name": "ipc1",
+   "prio": 24,
+   "stack_free": 504,
+   "core": 1
+  },
+  {
+   "name": "esp_timer",
+   "prio": 22,
+   "stack_free": 3188,
+   "core": 0
+  },
+  {
+   "name": "wifi",
+   "prio": 23,
+   "stack_free": 2548,
+   "core": 0
+  },
+  {
+   "name": "sys_evt",
+   "prio": 20,
+   "stack_free": 520,
+   "core": 0
+  },
+  {
+   "name": "cam_task",
+   "prio": 23,
+   "stack_free": 3492,
+   "core": 0
+  },
+  {
+   "name": "Tmr Svc",
+   "prio": 1,
+   "stack_free": 1516,
+   "core": -1
+  },
+  {
+   "name": "ipc0",
+   "prio": 1,
+   "stack_free": 400,
+   "core": 0
+  }
+ ]
+}

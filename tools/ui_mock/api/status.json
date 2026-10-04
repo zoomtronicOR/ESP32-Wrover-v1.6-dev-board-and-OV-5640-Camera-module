@@ -1,0 +1,153 @@
+{
+ "device": "ESP32 Camera",
+ "firmware": "0.1.0",
+ "uptime": 422,
+ "heap": 60339,
+ "heap_min": 27903,
+ "heap_largest": 31744,
+ "psram_total": 4194304,
+ "psram_free": 1433552,
+ "cpu": [
+  51,
+  99
+ ],
+ "led": "WIFI_CONNECTED",
+ "time": "04.10.2026 16:33:29",
+ "time_source": "ntp",
+ "wifi": {
+  "connected": true,
+  "ssid": "HomeNet",
+  "ip": "192.168.1.50",
+  "hostname": "esp32-camera-3456",
+  "rssi": -30,
+  "channel": 6,
+  "bssid": "a4:91:b1:2c:3d:4e",
+  "reconnects": 0,
+  "ap_active": false,
+  "ap_ssid": "ESP32-CAM-3456",
+  "ap_ip": ""
+ },
+ "camera": {
+  "ok": true,
+  "standby": false,
+  "sensor": "OV5640",
+  "fps": 8.6,
+  "frames": 3954,
+  "errors": 0,
+  "restarts": 0,
+  "width": 1024,
+  "height": 768,
+  "quality": 6,
+  "frame_bytes": 84176,
+  "stream_clients": 0,
+  "stream_max": 3
+ },
+ "motion": {
+  "enabled": false,
+  "active": false,
+  "changed_pct": 0,
+  "analysed": 1133,
+  "scene_changes": 0,
+  "analyse_ms": 361,
+  "events_today": 0,
+  "line": {
+   "enabled": true,
+   "in": 0,
+   "out": 0,
+   "last": ""
+  },
+  "tamper": {
+   "enabled": true,
+   "state": "ok",
+   "reason": "",
+   "edge_pct": 95,
+   "lost_pct": 25,
+   "ref_age_s": 53,
+   "alarms": 0
+  },
+  "zones": [
+   {
+    "name": "Zone 1",
+    "active": false,
+    "pct": 0
+   },
+   {
+    "name": "Zone 2",
+    "active": false,
+    "pct": 0
+   }
+  ]
+ },
+ "ai": {
+  "state": "off",
+  "last_error": "",
+  "inferences": 0,
+  "errors": 0,
+  "latency_ms": 0,
+  "fps": 0,
+  "last_object": "",
+  "objects": [
+   {
+    "label": "person",
+    "present": false,
+    "count": 0,
+    "confidence": 0,
+    "today": 0
+   },
+   {
+    "label": "car",
+    "present": false,
+    "count": 0,
+    "confidence": 0,
+    "today": 0
+   },
+   {
+    "label": "dog",
+    "present": false,
+    "count": 0,
+    "confidence": 0,
+    "today": 0
+   },
+   {
+    "label": "cat",
+    "present": false,
+    "count": 0,
+    "confidence": 0,
+    "today": 0
+   }
+  ]
+ },
+ "llm": {
+  "state": "idle",
+  "requests": 0,
+  "errors": 0,
+  "skipped": 0,
+  "last_seconds": 0,
+  "last_error": "",
+  "last_text": "",
+  "test_running": false,
+  "test_text": ""
+ },
+ "person": {
+  "state": "idle",
+  "present": false,
+  "score": 0,
+  "inference_ms": 0,
+  "total_ms": 0,
+  "inferences": 0,
+  "today": 0,
+  "last_error": ""
+ },
+ "modules": {
+  "mqtt": "ok",
+  "ha": "ok",
+  "sd": "n/a",
+  "ai": "off",
+  "llm": "idle",
+  "person": "idle",
+  "motion": "idle",
+  "ota": "ok"
+ },
+ "auth_enabled": true,
+ "default_password": true
+}

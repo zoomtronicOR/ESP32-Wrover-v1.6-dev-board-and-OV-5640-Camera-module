@@ -1,0 +1,26 @@
+{
+ "config": {
+  "enabled": true,
+  "api": 0,
+  "url": "http://192.168.1.20:11434/api/chat",
+  "model": "gemma3:4b",
+  "has_key": false,
+  "prompt": "Ovo je snimak sa sigurnosne kamere. U jednoj kratkoj rečenici na srpskom opiši šta se dešava. Navedi da li su prisutni osoba, vozilo ili životinja.",
+  "on_motion": true,
+  "on_object": true,
+  "cooldown_s": 60,
+  "timeout_s": 90,
+  "max_tokens": 120
+ },
+ "state": {
+  "state": "idle",
+  "requests": 0,
+  "errors": 0,
+  "skipped": 0,
+  "last_seconds": 0,
+  "last_error": "",
+  "last_text": "",
+  "test_running": false,
+  "test_text": ""
+ }
+}

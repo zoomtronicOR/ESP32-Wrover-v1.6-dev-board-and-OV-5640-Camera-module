@@ -278,6 +278,7 @@ main/                 firmware (ESP-IDF komponenta)
   models/             TFLite model za detekciju osobe (Apache-2.0)
   Kconfig.projbuild   pinovi kamere, LED, lozinka setup AP-a (menuconfig)
 tools/ai_server/      referentni YOLO server za eksterni AI
+tools/ui_mock/        lažni backend za snimke web UI-ja (docs/screenshots)
 docs/                 arhitektura i slike interfejsa
 partitions.csv        raspored flash-a (2 × 3 MB OTA, coredump, storage)
 sdkconfig.defaults    ESP-IDF podešavanja
