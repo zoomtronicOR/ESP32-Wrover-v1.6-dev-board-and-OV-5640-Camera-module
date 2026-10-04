@@ -63,3 +63,6 @@ esp_err_t cam_mgr_restart(void);
 void cam_mgr_suspend(bool suspend);
 // Driver counters, frame pool usage and live sensor registers (exposure, gain, AWB...).
 cJSON *cam_mgr_telemetry_json(void);
+// Hardware check for a sensor that is not detected: powers it up (PWDN low), drives XCLK and
+// scans the SCCB bus. {"xclk_gpio","pwdn_gpio","sda","scl","devices":["0x30",...],"ov2640_pid"?}
+cJSON *cam_mgr_bus_scan(void);

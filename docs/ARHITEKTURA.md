@@ -1,6 +1,6 @@
 # Arhitektura firmware-a
 
-Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Sastoji se od modula u `main/`. Svaki modul ima svoj NVS namespace, svoj FreeRTOS task (gde treba) i JSON API.
+Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Podržane su dve ploče, svaka sa svojim PlatformIO okruženjem: ESP32-WROVER-DEV + OV5640 (`wrover`) i AI-Thinker ESP32-CAM + OV2640 (`esp32cam`). Razlike (pinovi, LED, flash, particije) dolaze iz Kconfig izbora ploče; kod je isti, a ono što zavisi od senzora (standby, autofokus, opsezi podešavanja) bira se prema PID-u otkrivenog senzora. Sastoji se od modula u `main/`. Svaki modul ima svoj NVS namespace, svoj FreeRTOS task (gde treba) i JSON API.
 
 ```text
             OV5640 ──► camera_mgr ──► frame hub (4 PSRAM slota, ref-count)

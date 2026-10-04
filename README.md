@@ -1,6 +1,6 @@
-# ESP32-WROVER-DEV v1.6 + OV5640: kamera za Home Assistant
+# ESP32 kamera za Home Assistant: ESP32-WROVER-DEV + OV5640 i ESP32-CAM + OV2640
 
-ESP-IDF firmware koji od ESP32-WROVER ploče i OV5640 (5 MP) senzora pravi samostalnu Wi-Fi IP kameru bez cloud-a. Ima web interfejs, REST API, MJPEG stream, WebSocket telemetriju i MQTT/Home Assistant integraciju. Detektuje pokret, sabotažu kamere (prekrivena ili pomerena) i osobe na samom ESP32, broji prelaske linije, a preko eksternog servera prepoznaje objekte i opisuje događaje vision LLM-om.
+ESP-IDF firmware koji od ESP32 ploče sa kamerom pravi samostalnu Wi-Fi IP kameru bez cloud-a. Isti kod radi na dve ploče, svaka sa svojim PlatformIO okruženjem: **ESP32-WROVER-DEV v1.6 + OV5640 (5 MP)** i **AI-Thinker ESP32-CAM + OV2640 (2 MP)** (vidi [Podržane ploče](#podržane-ploče)). Ima web interfejs, REST API, MJPEG stream, WebSocket telemetriju i MQTT/Home Assistant integraciju. Detektuje pokret, sabotažu kamere (prekrivena ili pomerena) i osobe na samom ESP32, broji prelaske linije, a preko eksternog servera prepoznaje objekte i opisuje događaje vision LLM-om.
 
 Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](docs/ARHITEKTURA.md)**.
 
@@ -17,22 +17,62 @@ Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](do
 | ![AI server](docs/screenshots/10-ai-server.jpg) **AI**: eksterni AI server, praćenje objekata, test detekcije | ![Stats](docs/screenshots/11-stats.jpg) **Stats**: detekcije po satu i zdravlje sistema za 24 h |
 | ![Login](docs/screenshots/09-login.jpg) **Prijava** | |
 
-## Hardver
+## Podržane ploče
 
-- ESP32-D0WDQ6 (rev 1), 8 MB flash, 4 MB PSRAM, USB-serijski konvertor CH340
-- OV5640 na SCCB adresi 0x3C. Pinout je WROVER-KIT/Freenove: XCLK 21, SDA 26, SCL 27, D7..D0 = 35, 34, 39, 36, 19, 18, 5, 4, VSYNC 25, HREF 23, PCLK 22. Pinovi se menjaju u `menuconfig` → *ESP32 Camera board*.
-- Status LED na GPIO 2
+| | **ESP32-WROVER-DEV v1.6** | **AI-Thinker ESP32-CAM** |
+|---|---|---|
+| PlatformIO okruženje | `wrover` (podrazumevano) | `esp32cam` |
+| Čip | ESP32-D0WDQ6 rev 1 | ESP32-D0WDQ6 rev 1 |
+| Flash / PSRAM | 8 MB / 4 MB | 4 MB / 4 MB (čip od 8 MB, mapirano 4 MB) |
+| Kamera | OV5640, 5 MP, **sa autofokusom** | OV2640, 2 MP (UXGA), fiksni fokus |
+| Particije | `partitions.csv`: 2 × 3 MB OTA, coredump, storage | `partitions_4mb.csv`: 2 × 1,875 MB OTA, coredump |
+| Statusni LED | GPIO 2 | GPIO 33 (crveni, aktivan na niskom nivou) |
+| microSD | nema slota | ugrađen slot (SDMMC), podrška stiže u Fazi 6 |
+| USB / flešovanje | CH340 na ploči, auto-reset radi | ESP32-CAM-MB adapter (CH340); posle prvog flešovanja preporučen OTA |
+| Napajanje | USB | **eksterno 5 V** (vidi napomene ispod) |
+| Standby senzora | da (OV5640 power-down) | ne (OV2640 ga ne podnosi, vidi ispod) |
 
-## Build i flash (PlatformIO)
+Ploča se bira u Kconfig-u (`menuconfig` → *ESP32 Camera board* → *Board*). Izbor ploče postavlja podrazumevane pinove i LED. Okruženje `esp32cam` to radi samo, preko `sdkconfig.esp32cam.defaults`.
+
+### Ploča 1: ESP32-WROVER-DEV v1.6 + OV5640
+
+- OV5640 na SCCB adresi 0x3C, sa autofokusom: Camera tab → *Autofocus* (kontinualno ili jednokratno) i dugme *Focus now*.
+- Pinout je WROVER-KIT/Freenove: XCLK 21, SDA 26, SCL 27, D7..D0 = 35, 34, 39, 36, 19, 18, 5, 4, VSYNC 25, HREF 23, PCLK 22, PWDN i RESET nisu povezani.
+- Statusni LED na GPIO 2.
+- Ploča nema SD slot. Pinovi koje WROVER-KIT koristi za SD zauzeti su kamerom (GPIO 4), pa bi microSD tražio SPI modul na slobodnim pinovima.
 
 ```sh
-pio run                     # build
-pio run -t upload           # flash (COM8, podešeno u platformio.ini)
-pio device monitor          # serijska konzola, 115200
-pio run -t menuconfig       # sdkconfig / pinovi
+pio run -e wrover                 # build
+pio run -e wrover -t upload       # flash (port u platformio.ini)
+pio device monitor -e wrover      # serijska konzola, 115200
+pio run -e wrover -t menuconfig   # sdkconfig / pinovi
 ```
 
-ESP-IDF 5.3.2 se instalira automatski kroz PlatformIO (pioarduino platforma). Komponente `esp32-camera` i `mdns` preuzima IDF component manager.
+### Ploča 2: AI-Thinker ESP32-CAM + OV2640
+
+- OV2640 na SCCB adresi 0x30. Pinout: PWDN 32, XCLK 0, SDA 26, SCL 27, D7..D0 = 35, 34, 39, 36, 21, 19, 18, 5, VSYNC 25, HREF 23, PCLK 22.
+- Statusni LED je crveni LED na GPIO 33. Beli blic LED (GPIO 4) firmware drži ugašenim.
+- GPIO 2, 4, 12, 13, 14 i 15 pripadaju microSD slotu.
+- **Napajanje:** napajana preko USB-a i MB adaptera, kamera nije odgovarala na SCCB magistrali, a ploča se pri uključivanju zaustavljala u download modu. Na stabilnom **eksternom napajanju od 5 V** (pin 5V i GND, bar 500 mA) sve radi. Ne napajaj je preko pina 3V3.
+- **Prvo flešovanje preko MB adaptera:** auto-reset ne radi pouzdano. Drži **IO0**, kratko pritisni **RST**, pusti IO0, pa pokreni upload. Posle upisa pritisni samo RST (ili isključi i uključi napajanje) da se pokrene firmware.
+- **Kasnije: OTA.** Kad je ploča na mreži, firmware se šalje sa System → Firmware update (`.pio/build/esp32cam/firmware.bin`), bez tastera i USB-a.
+- Firmware zauzima oko 93 % OTA slota od 1,875 MB.
+
+```sh
+pio run -e esp32cam                 # build
+pio run -e esp32cam -t upload       # flash (IO0 + RST pre pokretanja)
+pio device monitor -e esp32cam      # serijska konzola, 115200
+```
+
+### Modul kamere
+
+Na tabu **Camera**, kartica *Camera module*, bira se koji je modul utaknut: **Auto** (OV5640 na WROVER-u, OV2640 na ESP32-CAM-u), **OV5640 (5 MP)** ili **OV2640 (2 MP)**. Izbor određuje veličinu JPEG bafera, a promena restartuje drajver kamere. Ako se izabrani modul razlikuje od onog koji drajver pronađe, Camera tab prikazuje upozorenje. Podešavanja koja senzor ne podržava (npr. autofokus na OV2640) automatski se skrivaju.
+
+### Kamera se ne javlja
+
+`GET /api/camera/scan` (ili serijska komanda `sccbscan`) uključi senzor, pusti XCLK takt i skenira SCCB magistralu. Ispravan senzor se javlja na adresi 0x30 (OV2640) ili 0x3C (OV5640). Prazna lista znači problem sa flat kablom, konektorom, modulom ili napajanjem.
+
+ESP-IDF 5.3.2 se instalira automatski kroz PlatformIO (pioarduino platforma). Komponente `esp32-camera`, `mdns` i ostale preuzima IDF component manager.
 
 ## Prvo pokretanje
 
@@ -65,6 +105,7 @@ Zaštita je uključena od prvog pokretanja. Dok je inicijalna lozinka aktivna, w
 | POST | `/api/camera/af` | Pokreće autofokus |
 | GET/POST | `/api/wifi` | Wi-Fi podešavanja |
 | GET | `/api/wifi/scan` | Skeniranje mreža |
+| GET | `/api/camera/scan` | Sken SCCB magistrale (dijagnostika kamere) |
 | GET/POST | `/api/system` | Informacije o sistemu i lista taskova; POST `{"device_name"}` |
 | POST | `/api/time` | `{"epoch": <unix s>}`: postavlja vreme iz browsera ako NTP ne radi |
 | POST | `/api/login`, `/api/logout` | Prijava (session cookie) / odjava |
@@ -198,7 +239,8 @@ Statistika se čuva samo u RAM-u, jer brisanje flash-a dok kamera radi zaglavi o
 ## Kamera, grejanje i standby
 
 - OV5640 se primetno greje kad neprekidno snima. Hladnjak na modulu je preporučen.
-- Kad niko ne gleda stream ni ne traži slike, senzor posle 10 s prelazi u **standby** (softverski power-down). Pri sledećem zahtevu se budi za ~0,5 s. Ovo se isključuje opcijom *Sensor standby when idle* na Camera tabu.
+- **OV5640 (WROVER):** kad niko ne gleda stream ni ne traži slike, senzor posle 10 s prelazi u **standby** (softverski power-down). Pri sledećem zahtevu se budi za ~0,5 s. Ovo se isključuje opcijom *Sensor standby when idle* na Camera tabu.
+- **OV2640 (ESP32-CAM):** standby se ne koristi. Softverski standby (COM2) na ovom modulu ugasi SCCB komunikaciju, a senzor se vraća tek kad se isključi napajanje. Restart ESP32 i OTA ne prekidaju napajanje kamere.
 - **Detekcija pokreta i sabotaže drže senzor stalno budnim**, jer im trebaju frame-ovi. Isto važi za lokalnu detekciju osobe i prelazak linije, koji rade na osnovu pokreta.
 - Podrazumevani *Gain ceiling* za OV5640 je 200 (~12,5x). Veća vrednost daje svetliju sliku pri slabom svetlu, ali i više šuma.
 
@@ -217,10 +259,11 @@ USB (CH340), 115200 baud, npr. `pio device monitor`. Prompt je `cam>`.
 | `auth off` | Privremeno isključuje zaštitu (lozinka ostaje) |
 | `auth token` | Ispisuje API token |
 | `log <none\|error\|warn\|info\|debug\|verbose> [tag]` | Nivo logovanja |
+| `sccbscan` | Dijagnostika kamere: sken SCCB magistrale |
 | `reboot` | Restart |
 | `factory_reset` / `factory_reset all` | Briše podešavanja (Wi-Fi ostaje) / sve, uključujući Wi-Fi |
 
-## Statusni LED (GPIO 2)
+## Statusni LED (GPIO 2 na WROVER-u, GPIO 33 na ESP32-CAM-u)
 
 | Šablon | Stanje |
 |---|---|
@@ -284,7 +327,8 @@ automation:
 - **Lokalna detekcija osobe** daje samo „osoba da/ne“. Za više klasa i okvire koristi se eksterni AI server.
 - **Prelazak linije** prati jedno težište pokreta, pa je najpouzdaniji kad kroz prolaz ide jedna osoba odjednom.
 - **Nisu urađeni:** HTTPS za web UI i MQTT preko TLS-a (kamera je predviđena za lokalnu mrežu).
-- **Ploča nema SD slot.** Pinovi koje WROVER-KIT koristi za SD zauzeti su kamerom (GPIO 4), pa microSD traži SPI na slobodnim pinovima.
+- **microSD:** WROVER ploča nema slot (GPIO 4 je kamera). ESP32-CAM ima ugrađen slot; podrška stiže u Fazi 6.
+- **ESP32-CAM:** treba mu stabilno eksterno napajanje od 5 V, a za flešovanje preko USB-a IO0 + RST (vidi [Ploča 2](#ploča-2-ai-thinker-esp32-cam--ov2640)).
 
 ## Struktura repozitorijuma
 
@@ -292,13 +336,15 @@ automation:
 main/                 firmware (ESP-IDF komponenta)
   web/index.html      web UI (ugrađen u firmware)
   models/             TFLite model za detekciju osobe (Apache-2.0)
-  Kconfig.projbuild   pinovi kamere, LED, lozinka setup AP-a (menuconfig)
+  Kconfig.projbuild   izbor ploče, pinovi kamere, LED, lozinka setup AP-a (menuconfig)
 tools/ai_server/      referentni YOLO server za eksterni AI
 tools/ui_mock/        lažni backend za snimke web UI-ja (docs/screenshots)
 docs/                 arhitektura i slike interfejsa
-partitions.csv        raspored flash-a (2 × 3 MB OTA, coredump, storage)
-sdkconfig.defaults    ESP-IDF podešavanja
-platformio.ini        PlatformIO projekat (COM port, ploča)
+partitions.csv        raspored flash-a za WROVER (8 MB: 2 × 3 MB OTA, coredump, storage)
+partitions_4mb.csv    raspored flash-a za ESP32-CAM (4 MB: 2 × 1,875 MB OTA, coredump)
+sdkconfig.defaults    zajednička ESP-IDF podešavanja
+sdkconfig.esp32cam.defaults  dodaci za ESP32-CAM (ploča, 4 MB flash, particije)
+platformio.ini        PlatformIO okruženja `wrover` i `esp32cam` (COM port, flash, particije)
 ```
 
 ## Status razvoja
@@ -313,10 +359,11 @@ platformio.ini        PlatformIO projekat (COM port, ploča)
 - [x] **Faza 8, sigurnost:** prijava, API token, HTTP Basic, zaključavanje, zaštićeni OTA sa rollback-om
 - [x] **Tamper alarm:** kamera prekrivena, zaslepljena ili pomerena (događaji, MQTT, HA senzor)
 - [x] **Statistika:** po satu za 24 h (pokreti, osobe, objekti, IN/OUT, tamper, FPS, RSSI, CPU, memorija), Stats tab sa grafikonima
+- [x] **ESP32-CAM + OV2640:** druga ploča (okruženje `esp32cam`), izbor modula kamere na Camera tabu, dijagnostika SCCB magistrale
 - [x] **Resursi:** trake iskorišćenosti (CPU, RAM, PSRAM, DMA, particija, NVS, stream slotovi, Wi-Fi) na System tabu
 
 **Sledeće:**
-- [ ] Faza 6: microSD preko SPI-ja (podrazumevano isključen), timelapse
+- [ ] Faza 6: microSD u ugrađenom slotu ESP32-CAM-a (SDMMC, podrazumevano isključen), timelapse
 
 ## Licence
 

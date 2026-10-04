@@ -579,6 +579,11 @@ static esp_err_t camera_defaults_post(httpd_req_t *req)
     return send_json(req, cam_mgr_settings_to_json(), NULL);
 }
 
+static esp_err_t camera_scan_get(httpd_req_t *req)
+{
+    return send_json(req, cam_mgr_bus_scan(), NULL);
+}
+
 static esp_err_t camera_af_post(httpd_req_t *req)
 {
     esp_err_t err = cam_mgr_af_trigger();
@@ -1023,6 +1028,7 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/camera/save", HTTP_POST, camera_save_post);
     reg(s_api, "/api/camera/defaults", HTTP_POST, camera_defaults_post);
     reg(s_api, "/api/camera/af", HTTP_POST, camera_af_post);
+    reg(s_api, "/api/camera/scan", HTTP_GET, camera_scan_get);
     reg(s_api, "/api/wifi", HTTP_GET, wifi_get);
     reg(s_api, "/api/wifi", HTTP_POST, wifi_post);
     reg(s_api, "/api/wifi/scan", HTTP_GET, wifi_scan_get);

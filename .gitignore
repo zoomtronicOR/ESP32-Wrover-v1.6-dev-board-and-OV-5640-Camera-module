@@ -11,3 +11,4 @@ CLAUDE.md
 ESP32_WROVER_OV5640_Advanced_Camera_HA_Specifikacija.md
 PREDLOZI.md
 __pycache__/
+sdkconfig.esp32cam

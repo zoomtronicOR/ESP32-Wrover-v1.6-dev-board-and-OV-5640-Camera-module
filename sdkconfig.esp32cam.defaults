@@ -1,0 +1,4 @@
+# AI-Thinker ESP32-CAM: applied after sdkconfig.defaults (see platformio.ini)
+CONFIG_CAM_BOARD_AI_THINKER=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"

@@ -1,5 +1,8 @@
 #include <string.h>
 #include "camera_mgr.h"
+#include "driver/gpio.h"
+#include "driver/i2c.h"
+#include "driver/ledc.h"
 #include "app_config.h"
 #include "esp_camera.h"
 #include "esp_camera_af.h"
@@ -24,6 +27,14 @@ static const char *TAG = "camera";
 #define STANDBY_AFTER_US   (10 * 1000000LL)  // idle time before the sensor is powered down
 #define WAKE_SETTLE_US     (400 * 1000LL)    // frames dropped after wake while AEC/AWB settle
 #define OV5640_SYS_CTRL0   0x3008
+// Camera module ("sensor" setting): sizes the JPEG buffers for the module's largest frame once,
+// so any later resolution fits without a driver restart. Auto = the board's usual module.
+enum { SENSOR_AUTO, SENSOR_OV5640, SENSOR_OV2640 };
+#if CONFIG_CAM_BOARD_AI_THINKER
+#define BOARD_SENSOR       SENSOR_OV2640
+#else
+#define BOARD_SENSOR       SENSOR_OV5640
+#endif
 #define OV5640_PWDN_BIT    0x40
 
 /* ---------------------------------------------------------------------------------------------
@@ -44,7 +55,7 @@ enum {
     P_WHITEBAL, P_AWB_GAIN, P_WB_MODE,
     P_BPC, P_WPC, P_RAW_GMA, P_LENC, P_DCW,
     P_AF_MODE,
-    P_XCLK, P_FB_COUNT, P_GRAB_LATEST,
+    P_SENSOR, P_XCLK, P_FB_COUNT, P_GRAB_LATEST,
     P_COUNT
 };
 
@@ -105,6 +116,7 @@ static const char *const OPT_EFFECT[] = {"None", "Negative", "Grayscale", "Red t
 static const char *const OPT_WB[] = {"Auto", "Sunny", "Cloudy", "Office", "Home"};
 static const char *const OPT_GAINCEIL[] = {"2x", "4x", "8x", "16x", "32x", "64x", "128x"};
 static const char *const OPT_AF[] = {"Off", "Continuous", "Single (trigger)"};
+static const char *const OPT_SENSOR[] = {"Auto (board default)", "OV5640 (5 MP)", "OV2640 (2 MP)"};
 
 static const param_def_t PARAMS[P_COUNT] = {
     [P_FRAMESIZE]      = {"framesize", "Resolution", "stream", PT_ENUM, 0, FRAMESIZE_5MP, FRAMESIZE_SVGA, NULL, ap_framesize, 0},
@@ -136,6 +148,7 @@ static const param_def_t PARAMS[P_COUNT] = {
     [P_LENC]           = {"lenc", "Lens correction", "dsp", PT_BOOL, 0, 1, 1, NULL, ap_lenc, 0},
     [P_DCW]            = {"dcw", "Downsize (DCW)", "dsp", PT_BOOL, 0, 1, 1, NULL, ap_dcw, 0},
     [P_AF_MODE]        = {"af_mode", "Autofocus", "focus", PT_ENUM, 0, 2, 0, OPT_AF, ap_af_mode, 0},
+    [P_SENSOR]         = {"sensor", "Camera module", "module", PT_ENUM, 0, 2, SENSOR_AUTO, OPT_SENSOR, NULL, F_INIT},
     [P_XCLK]           = {"xclk_mhz", "XCLK (MHz)", "init", PT_RANGE, 6, 24, CONFIG_CAM_XCLK_MHZ_DEFAULT, NULL, NULL, F_INIT},
     [P_FB_COUNT]       = {"fb_count", "Frame buffers", "init", PT_RANGE, 1, 3, 2, NULL, NULL, F_INIT},
     [P_GRAB_LATEST]    = {"grab_latest", "Grab latest frame", "init", PT_BOOL, 0, 1, 1, NULL, NULL, F_INIT},
@@ -356,6 +369,12 @@ static void apply_all(sensor_t *s)
     }
 }
 
+// Module the user selected, or the board's usual one.
+static int sensor_model(void)
+{
+    return s_val[P_SENSOR] == SENSOR_AUTO ? BOARD_SENSOR : s_val[P_SENSOR];
+}
+
 static esp_err_t driver_start(void)
 {
     camera_config_t cfg = {
@@ -379,9 +398,7 @@ static esp_err_t driver_start(void)
         .ledc_timer = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
         .pixel_format = PIXFORMAT_JPEG,
-        // Init at the largest size so the JPEG buffers fit any resolution chosen later;
-        // the driver clamps this to the sensor maximum.
-        .frame_size = FRAMESIZE_5MP,
+        .frame_size = sensor_model() == SENSOR_OV2640 ? FRAMESIZE_UXGA : FRAMESIZE_5MP,
         .jpeg_quality = s_val[P_QUALITY],
         .fb_count = s_val[P_FB_COUNT],
         .fb_location = CAMERA_FB_IN_PSRAM,
@@ -402,7 +419,8 @@ static esp_err_t driver_start(void)
 }
 
 // Software power-down keeps the sensor cool while nobody is watching (OV5640 runs hot when
-// streaming continuously). Caller holds s_drv_lock.
+// streaming continuously). OV5640 only: the OV2640 COM2 soft standby stops the sensor answering
+// on SCCB on the AI-Thinker module, and only a power cycle brings it back. Caller holds s_drv_lock.
 static void sensor_standby(bool on)
 {
     sensor_t *s = esp_camera_sensor_get();
@@ -702,6 +720,10 @@ cJSON *cam_mgr_settings_to_json(void)
     cJSON *root = cJSON_CreateObject();
     cJSON *sensor = cJSON_AddObjectToObject(root, "sensor");
     cJSON_AddStringToObject(sensor, "name", s_sensor_name);
+    // Selected module vs the one the driver found (the UI warns on a mismatch).
+    int want = sensor_model();
+    cJSON_AddStringToObject(sensor, "expected", want == SENSOR_OV2640 ? "OV2640" : "OV5640");
+    cJSON_AddBoolToObject(sensor, "mismatch", s_ok && s_pid != (want == SENSOR_OV2640 ? OV2640_PID : OV5640_PID));
     cJSON_AddNumberToObject(sensor, "pid", s_pid);
     cJSON_AddBoolToObject(sensor, "ok", s_ok);
 
@@ -974,5 +996,73 @@ cJSON *cam_mgr_telemetry_json(void)
         add_ov5640_registers(esp_camera_sensor_get(), regs);
     }
     xSemaphoreGive(s_drv_lock);
+    return o;
+}
+
+/* ------------------------------------------------------------------ SCCB bus scan --------- */
+
+static esp_err_t sccb_write(uint8_t addr, uint8_t reg, uint8_t val)
+{
+    uint8_t b[2] = {reg, val};
+    return i2c_master_write_to_device(I2C_NUM_0, addr, b, 2, pdMS_TO_TICKS(20));
+}
+
+cJSON *cam_mgr_bus_scan(void)
+{
+    cam_mgr_suspend(true);
+    if (CONFIG_CAM_PIN_PWDN >= 0) {
+        gpio_reset_pin(CONFIG_CAM_PIN_PWDN);
+        gpio_set_direction(CONFIG_CAM_PIN_PWDN, GPIO_MODE_OUTPUT);
+        gpio_set_level(CONFIG_CAM_PIN_PWDN, 0);
+    }
+    ledc_timer_config_t t = {.speed_mode = LEDC_HIGH_SPEED_MODE, .duty_resolution = LEDC_TIMER_1_BIT,
+                             .timer_num = LEDC_TIMER_1, .freq_hz = 20000000, .clk_cfg = LEDC_AUTO_CLK};
+    ledc_channel_config_t c = {.gpio_num = CONFIG_CAM_PIN_XCLK, .speed_mode = LEDC_HIGH_SPEED_MODE,
+                               .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_1, .duty = 1};
+    bool clk = ledc_timer_config(&t) == ESP_OK && ledc_channel_config(&c) == ESP_OK;
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "xclk_ok", clk);
+    cJSON_AddNumberToObject(o, "xclk_gpio", CONFIG_CAM_PIN_XCLK);
+    cJSON_AddNumberToObject(o, "pwdn_gpio", CONFIG_CAM_PIN_PWDN);
+    cJSON_AddNumberToObject(o, "sda", CONFIG_CAM_PIN_SIOD);
+    cJSON_AddNumberToObject(o, "scl", CONFIG_CAM_PIN_SIOC);
+    // Legacy I2C API on purpose: the camera driver links it, and the new i2c_master driver
+    // in the same image aborts at boot.
+    i2c_config_t ic = {.mode = I2C_MODE_MASTER, .sda_io_num = CONFIG_CAM_PIN_SIOD, .scl_io_num = CONFIG_CAM_PIN_SIOC,
+                       .sda_pullup_en = GPIO_PULLUP_ENABLE, .scl_pullup_en = GPIO_PULLUP_ENABLE, .master.clk_speed = 100000};
+    esp_err_t err = i2c_param_config(I2C_NUM_0, &ic);
+    if (err == ESP_OK) {
+        err = i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
+    }
+    if (err != ESP_OK) {
+        cJSON_AddStringToObject(o, "error", esp_err_to_name(err));
+    } else {
+        cJSON *dev = cJSON_AddArrayToObject(o, "devices");
+        for (int a = 0x08; a < 0x78; a++) {
+            i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+            i2c_master_start(cmd);
+            i2c_master_write_byte(cmd, (a << 1) | I2C_MASTER_WRITE, true);
+            i2c_master_stop(cmd);
+            if (i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(20)) == ESP_OK) {
+                char s[8];
+                snprintf(s, sizeof(s), "0x%02x", a);
+                cJSON_AddItemToArray(dev, cJSON_CreateString(s));
+                if (a == 0x30 && sccb_write(a, 0xFF, 0x01) == ESP_OK) {  // OV2640: sensor bank, PID at 0x0A
+                    uint8_t reg = 0x0A, pid = 0;
+                    if (i2c_master_write_read_device(I2C_NUM_0, a, &reg, 1, &pid, 1, pdMS_TO_TICKS(20)) == ESP_OK) {
+                        cJSON_AddNumberToObject(o, "pid_at_0x30", pid);
+                    }
+                }
+            }
+            i2c_cmd_link_delete(cmd);
+        }
+        i2c_driver_delete(I2C_NUM_0);
+    }
+    ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
+    cam_mgr_suspend(false);
+    cJSON_AddBoolToObject(o, "camera_ok", s_ok);
+    cJSON_AddStringToObject(o, "sensor", s_ok ? s_sensor_name : "none");
     return o;
 }

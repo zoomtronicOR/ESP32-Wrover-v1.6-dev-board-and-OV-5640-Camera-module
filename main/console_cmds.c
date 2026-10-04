@@ -31,6 +31,16 @@ static int cmd_wifi(int argc, char **argv)
     return err == ESP_OK ? 0 : 1;
 }
 
+static int cmd_sccbscan(int argc, char **argv)
+{
+    cJSON *r = cam_mgr_bus_scan();
+    char *txt = cJSON_Print(r);
+    printf("%s\n", txt ? txt : "?");
+    cJSON_free(txt);
+    cJSON_Delete(r);
+    return 0;
+}
+
 static int cmd_status(int argc, char **argv)
 {
     cJSON *s = web_status_json();
@@ -172,6 +182,7 @@ void console_cmds_start(void)
         {.command = "auth", .help = "Recovery: auth reset (admin/espadmin), auth off (disable protection), auth token", .func = cmd_auth},
         {.command = "ntp", .help = "Show system time and NTP server reachability", .func = cmd_ntp},
         {.command = "log", .help = "Set log level: log <level> [tag]", .func = cmd_log},
+        {.command = "sccbscan", .help = "Camera hardware check: power the sensor, drive XCLK, scan the SCCB bus", .func = cmd_sccbscan},
         {.command = "reboot", .help = "Restart the device", .func = cmd_reboot},
         {.command = "factory_reset", .help = "Reset config (keeps Wi-Fi); 'factory_reset all' also erases Wi-Fi", .func = cmd_factory_reset},
     };

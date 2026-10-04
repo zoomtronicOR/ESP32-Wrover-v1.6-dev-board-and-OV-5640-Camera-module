@@ -515,14 +515,14 @@ $('qq').onchange = e => quickSet('quality', e.target.value);
 $('qfps').onchange = e => quickSet('fps_limit', e.target.value);
 
 /* ---------- camera settings ---------- */
-const GROUPS = { stream: 'Stream / JPEG', image: 'Image', exposure: 'Exposure & gain', wb: 'White balance', dsp: 'Sensor DSP', focus: 'Autofocus', init: 'Driver (restarts camera)' };
+const GROUPS = { module: 'Camera module (restarts camera)', stream: 'Stream / JPEG', image: 'Image', exposure: 'Exposure & gain', wb: 'White balance', dsp: 'Sensor DSP', focus: 'Autofocus', init: 'Driver (restarts camera)' };
 async function loadCamera() { if (!camCfg) $('camgroups').innerHTML = '<div class="card muted">loading…</div>'; try { camCfg = await api('/api/camera'); renderCamera(); } catch (e) { toast('camera: ' + e.message); } }
 function markDirty() { dirty = true; $('dirty').textContent = '● unsaved changes'; }
 function paramVal(id) { return camCfg.params.find(p => p.id === id); }
 function renderCamera() {
   if (!camCfg) return;
   const s = camCfg.sensor;
-  $('sensorname').textContent = `${s.name}${s.ok ? '' : ' (not responding)'}`;
+  $('sensorname').textContent = `${s.name}${s.ok ? '' : ' (not responding)'}${s.mismatch ? ` — ⚠ ${s.expected} selected, ${s.name} detected` : ''}`;
   const fsz = paramVal('framesize');
   $('qres').innerHTML = fsz.options.map(o => `<option value="${o.v}"${o.v === fsz.value ? ' selected' : ''}>${esc(o.name)}</option>`).join('');
   $('qq').value = paramVal('quality').value; $('qfps').value = paramVal('fps_limit').value;

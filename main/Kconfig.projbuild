@@ -1,10 +1,22 @@
 menu "ESP32 Camera board"
 
-    comment "Camera pins (default: ESP32-WROVER-DEV / Freenove / WROVER-KIT layout)"
+    choice CAM_BOARD
+        prompt "Board"
+        default CAM_BOARD_WROVER
+        help
+            Selects the default camera pins, status LED and storage interface.
+        config CAM_BOARD_WROVER
+            bool "ESP32-WROVER-DEV / Freenove / WROVER-KIT (OV5640)"
+        config CAM_BOARD_AI_THINKER
+            bool "AI-Thinker ESP32-CAM (OV2640, microSD slot)"
+    endchoice
+
+    comment "Camera pins (defaults follow the board above)"
 
     config CAM_PIN_PWDN
         int "PWDN GPIO (-1 = not connected)"
         range -1 39
+        default 32 if CAM_BOARD_AI_THINKER
         default -1
     config CAM_PIN_RESET
         int "RESET GPIO (-1 = not connected)"
@@ -12,6 +24,7 @@ menu "ESP32 Camera board"
         default -1
     config CAM_PIN_XCLK
         int "XCLK GPIO"
+        default 0 if CAM_BOARD_AI_THINKER
         default 21
     config CAM_PIN_SIOD
         int "SIOD (SCCB SDA) GPIO"
@@ -33,15 +46,19 @@ menu "ESP32 Camera board"
         default 36
     config CAM_PIN_D3
         int "D3 (Y5) GPIO"
+        default 21 if CAM_BOARD_AI_THINKER
         default 19
     config CAM_PIN_D2
         int "D2 (Y4) GPIO"
+        default 19 if CAM_BOARD_AI_THINKER
         default 18
     config CAM_PIN_D1
         int "D1 (Y3) GPIO"
+        default 18 if CAM_BOARD_AI_THINKER
         default 5
     config CAM_PIN_D0
         int "D0 (Y2) GPIO"
+        default 5 if CAM_BOARD_AI_THINKER
         default 4
     config CAM_PIN_VSYNC
         int "VSYNC GPIO"
@@ -61,9 +78,11 @@ menu "ESP32 Camera board"
     config STATUS_LED_GPIO
         int "Status LED GPIO (-1 = none)"
         range -1 33
+        default 33 if CAM_BOARD_AI_THINKER
         default 2
     config STATUS_LED_ACTIVE_HIGH
         bool "Status LED is active-high"
+        default n if CAM_BOARD_AI_THINKER
         default y
 
     config SETUP_AP_PASSWORD

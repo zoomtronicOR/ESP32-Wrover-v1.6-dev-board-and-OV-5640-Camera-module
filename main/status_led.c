@@ -46,6 +46,12 @@ static void led_task(void *arg)
 
 void status_led_init(void)
 {
+#if CONFIG_CAM_BOARD_AI_THINKER
+    // The white flash LED (GPIO 4) glows when the pin floats; keep it off.
+    gpio_reset_pin(GPIO_NUM_4);
+    gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_4, 0);
+#endif
 #if CONFIG_STATUS_LED_GPIO >= 0
     gpio_reset_pin(CONFIG_STATUS_LED_GPIO);
     gpio_set_direction(CONFIG_STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
