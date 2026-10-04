@@ -404,6 +404,10 @@ progress{width:100%;height:14px}
         <button class="b danger" id="resetbtn">Reset configuration</button>
         <button class="b danger" id="resetallbtn">Reset configuration + Wi-Fi</button>
       </div>
+      <h2 style="margin-top:16px">Configuration backup</h2>
+      <div class="toolbar" style="margin:0"><button class="b sec" id="cfgexport">Export</button><label class="muted"><input type="checkbox" id="cfgsecrets"> include passwords</label>
+        <input type="file" id="cfgfile" accept=".json,application/json"><button class="b sec" id="cfgimport">Import</button></div>
+      <p class="muted" id="cfgmsg" style="margin:6px 0 0">Camera, motion, AI, LLM, MQTT, Wi-Fi, storage and device name as one JSON file. Passwords, tokens and keys are left out unless ticked. Login settings are never exported.</p>
       <h2 style="margin-top:16px">Tasks</h2><table id="tasktable"></table>
     </div>
   </div>
@@ -569,7 +573,7 @@ function renderCamera() {
     }
     box.appendChild(card);
   }
-  const at = $('aftrig'); if (at) at.onclick = async () => { try { await api('/api/camera/af', {}); toast('focus triggered'); setTimeout(loadCamera, 1500); } catch (e) { toast(e.message); } };
+  const at = $('aftrig'); if (at) at.onclick = async () => { try { await api('/api/camera/af', {}); toast('focusing…'); for (let i = 1; i <= 6; i++) setTimeout(loadCamera, i * 1000); } catch (e) { toast(e.message); } };
 }
 let applyTimer = {};
 function paramRow(p) {
@@ -1251,6 +1255,18 @@ async function loadSystem() {
       s.tasks.sort((a, b) => a.name.localeCompare(b.name)).map(t => `<tr><td>${esc(t.name)}</td><td>${t.prio}</td><td>${t.core < 0 ? 'any' : t.core}</td><td class="num">${t.stack_free}</td></tr>`).join('');
   } catch (e) { toast(e.message); }
 }
+$('cfgexport').onclick = () => { const a = document.createElement('a'); a.href = '/api/config/export' + ($('cfgsecrets').checked ? '?secrets=1' : ''); a.download = ''; a.click(); };
+$('cfgimport').onclick = async () => {
+  const f = $('cfgfile').files[0]; if (!f) return toast('Choose a backup file first');
+  let cfg; try { cfg = JSON.parse(await f.text()); } catch (e) { return toast('Not a JSON file'); }
+  if (!confirm('Import this configuration? Current settings will be overwritten.')) return;
+  try {
+    const r = await fetch('/api/config/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) }).then(x => x.json());
+    const errs = Object.entries(r.errors || {}).map(([k, v]) => `${k}: ${v}`);
+    $('cfgmsg').textContent = r.applied ? `Imported: ${r.applied.join(', ') || 'nothing'}${errs.length ? '. Problems: ' + errs.join('; ') : ''}` : (r.error || 'import failed');
+    toast(errs.length ? 'Imported with problems' : 'Configuration imported');
+  } catch (e) { toast(e.message); }
+};
 $('sysform').onsubmit = async e => { e.preventDefault(); try { await api('/api/system', { device_name: $('s_name').value }); toast('Saved'); pollStatus(); } catch (x) { toast(x.message); } };
 $('rebootbtn').onclick = async () => { if (!confirm('Reboot the camera?')) return; await api('/api/reboot', {}).catch(() => {}); toast('Rebooting…', 8000); };
 $('resetbtn').onclick = async () => { if (!confirm('Reset all settings except Wi-Fi?')) return; await api('/api/factory-reset', { wifi: false }).catch(() => {}); toast('Reset, rebooting…', 8000); };

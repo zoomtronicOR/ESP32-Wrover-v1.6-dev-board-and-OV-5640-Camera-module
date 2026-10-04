@@ -23,6 +23,8 @@ const char *mqtt_mgr_ha_state(void);
 
 // Settings JSON for the web UI (password replaced by has_password).
 cJSON *mqtt_mgr_config_json(void);
+// Settings only (no live state) for a backup; the password only when secrets is set.
+cJSON *mqtt_mgr_config_export(bool secrets);
 // Applies + saves settings and restarts the client. err receives a message on failure.
 esp_err_t mqtt_mgr_set_config(const cJSON *cfg, char *err, size_t err_len);
 // Re-sends Home Assistant discovery messages.

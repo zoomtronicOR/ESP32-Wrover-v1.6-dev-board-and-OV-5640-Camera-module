@@ -322,15 +322,40 @@ static framesize_t min_fs(int a, framesize_t b)
 
 /* ------------------------------------------------------------------ autofocus ------------- */
 
+// OV5640 autofocus MCU commands. The driver only loads the AF firmware; the commands are sent
+// here because the driver's own sequence adds non-standard commands and gives up after 2 s,
+// while the sensor needs ~4 s to acknowledge (measured). Commands are fire-and-forget; the UI
+// follows the firmware status register.
+#define OV5640_AF_MAIN       0x3022
+#define OV5640_AF_ACK        0x3023
+#define OV5640_AF_STATUS     0x3029
+#define OV5640_AF_SINGLE     0x03
+#define OV5640_AF_CONTINUOUS 0x04
+#define OV5640_AF_PAUSE      0x06  // stop continuous AF, lens stays where it is
+#define OV5640_AF_RELEASE    0x08  // lens back to infinity
+#define OV5640_AF_ST_FOCUSING 0x00
+#define OV5640_AF_ST_FOCUSED  0x10  // single shot done
+#define OV5640_AF_ST_CAF      0x20  // continuous: in focus
+#define OV5640_AF_ST_IDLE     0x70
+
+static int af_cmd(sensor_t *s, int cmd)
+{
+    if (s->set_reg(s, OV5640_AF_ACK, 0xff, 0x01) < 0 || s->set_reg(s, OV5640_AF_MAIN, 0xff, cmd) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int ap_af_mode(sensor_t *s, int v)
 {
-    if (!esp_camera_af_is_supported(s)) {
+    if (!esp_camera_af_is_supported(s) || !s->set_reg || !s->get_reg) {
         return NOT_SUPPORTED;
     }
     if (v == 0) {
-        return s_af_ready ? (esp_camera_af_set_mode(s, ESP_CAMERA_AF_MODE_MANUAL) == ESP_OK ? 0 : -1) : 0;
+        return s_af_ready ? af_cmd(s, OV5640_AF_RELEASE) : 0;
     }
     if (!s_af_ready) {
+        // Loads the firmware into the AF MCU and waits until it reports idle (0x70).
         esp_camera_af_config_t cfg = {.mode = ESP_CAMERA_AF_MODE_MANUAL, .timeout_ms = 3000};
         if (esp_camera_af_init(s, &cfg) != ESP_OK) {
             ESP_LOGW(TAG, "autofocus firmware failed to load");
@@ -339,8 +364,8 @@ static int ap_af_mode(sensor_t *s, int v)
         s_af_ready = true;
         ESP_LOGI(TAG, "autofocus firmware loaded");
     }
-    esp_camera_af_mode_t mode = (v == 1) ? ESP_CAMERA_AF_MODE_AUTO : ESP_CAMERA_AF_MODE_MANUAL;
-    return esp_camera_af_set_mode(s, mode) == ESP_OK ? 0 : -1;
+    // Single mode stops continuous AF and keeps the lens; "Focus now" triggers a single shot.
+    return af_cmd(s, v == 1 ? OV5640_AF_CONTINUOUS : OV5640_AF_PAUSE);
 }
 
 esp_err_t cam_mgr_af_trigger(void)
@@ -349,9 +374,35 @@ esp_err_t cam_mgr_af_trigger(void)
         return ESP_ERR_INVALID_STATE;
     }
     xSemaphoreTake(s_drv_lock, portMAX_DELAY);
-    esp_err_t err = esp_camera_af_trigger(esp_camera_sensor_get());
+    sensor_t *s = s_ok ? esp_camera_sensor_get() : NULL;
+    esp_err_t err = (s && af_cmd(s, OV5640_AF_SINGLE) == 0) ? ESP_OK : ESP_FAIL;
     xSemaphoreGive(s_drv_lock);
     return err;
+}
+
+int cam_mgr_reg_read(int reg)
+{
+    xSemaphoreTake(s_drv_lock, portMAX_DELAY);
+    sensor_t *s = s_ok ? esp_camera_sensor_get() : NULL;
+    int v = (s && s->get_reg) ? s->get_reg(s, reg, 0xff) : -1;
+    xSemaphoreGive(s_drv_lock);
+    return v;
+}
+
+esp_err_t cam_mgr_reg_write(int reg, int value)
+{
+    xSemaphoreTake(s_drv_lock, portMAX_DELAY);
+    sensor_t *s = s_ok ? esp_camera_sensor_get() : NULL;
+    int r = (s && s->set_reg) ? s->set_reg(s, reg, 0xff, value) : -1;
+    xSemaphoreGive(s_drv_lock);
+    return r < 0 ? ESP_FAIL : ESP_OK;
+}
+
+void cam_mgr_af_reset(void)
+{
+    xSemaphoreTake(s_drv_lock, portMAX_DELAY);
+    s_af_ready = false;
+    xSemaphoreGive(s_drv_lock);
 }
 
 /* ------------------------------------------------------------------ driver ---------------- */
@@ -479,6 +530,9 @@ static void sensor_standby(bool on)
     if (s->set_reg(s, OV5640_SYS_CTRL0, OV5640_PWDN_BIT, on ? OV5640_PWDN_BIT : 0) == 0) {
         s_standby = on;
         ESP_LOGI(TAG, "sensor %s", on ? "in standby" : "awake");
+        if (!on && s_af_ready && s_val[P_AF_MODE] == 1) {
+            af_cmd(s, OV5640_AF_CONTINUOUS);
+        }
     }
 }
 
@@ -811,13 +865,12 @@ cJSON *cam_mgr_settings_to_json(void)
     cJSON *af = cJSON_AddObjectToObject(sensor, "af");
     cJSON_AddBoolToObject(af, "supported", s_supported[P_AF_MODE]);
     cJSON_AddBoolToObject(af, "ready", s_af_ready);
-    if (s_af_ready) {
-        esp_camera_af_status_t st;
-        if (esp_camera_af_get_status(esp_camera_sensor_get(), &st) == ESP_OK) {
-            cJSON_AddBoolToObject(af, "focused", st.focused);
-            cJSON_AddBoolToObject(af, "busy", st.busy);
-            cJSON_AddNumberToObject(af, "raw", st.raw);
-        }
+    sensor_t *afs = s_ok ? esp_camera_sensor_get() : NULL;
+    if (s_af_ready && afs && afs->get_reg) {
+        int st = afs->get_reg(afs, OV5640_AF_STATUS, 0xff);
+        cJSON_AddBoolToObject(af, "focused", st == OV5640_AF_ST_FOCUSED || st == OV5640_AF_ST_CAF);
+        cJSON_AddBoolToObject(af, "busy", st == OV5640_AF_ST_FOCUSING);
+        cJSON_AddNumberToObject(af, "raw", st);
     }
     xSemaphoreGive(s_drv_lock);
 

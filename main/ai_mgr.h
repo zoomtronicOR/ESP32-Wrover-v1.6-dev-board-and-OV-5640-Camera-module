@@ -19,6 +19,8 @@ esp_err_t ai_mgr_init(void);
 // "off", "idle" (waiting for motion), "ok", "error"
 const char *ai_mgr_state(void);
 cJSON *ai_mgr_config_json(void);
+// Config for a backup; the API token only when secrets is set (spec §27).
+cJSON *ai_mgr_config_export(bool secrets);
 cJSON *ai_mgr_state_json(void);
 esp_err_t ai_mgr_set_config(const cJSON *cfg, char *err, size_t err_len);
 esp_err_t ai_mgr_set_enabled(bool enabled);

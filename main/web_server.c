@@ -10,6 +10,7 @@
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
 #include "mbedtls/base64.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -17,6 +18,7 @@
 #include "event_mgr.h"
 #include "llm_mgr.h"
 #include "motion_mgr.h"
+#include "backup.h"
 #include "sd_mgr.h"
 #include "stats_mgr.h"
 #include "person_mgr.h"
@@ -30,7 +32,7 @@
 static const char *TAG = "web";
 
 #define MAX_STREAM_CLIENTS  3
-#define MAX_BODY_LEN        4096
+#define MAX_BODY_LEN        16384  // a full config backup; bodies over 2 KB go to PSRAM
 #define STREAM_BOUNDARY     "esp32camframe"
 #define STREAM_IDLE_LIMIT   10   // consecutive 3 s waits without a frame before dropping a client
 #define WS_PUSH_PERIOD_MS   1000
@@ -74,7 +76,7 @@ static cJSON *read_json_body(httpd_req_t *req)
     if (len <= 0 || len > MAX_BODY_LEN) {
         return NULL;
     }
-    char *buf = malloc(len + 1);
+    char *buf = len > 2048 ? heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM) : malloc(len + 1);
     if (!buf) {
         return NULL;
     }
@@ -591,6 +593,36 @@ static esp_err_t camera_af_post(httpd_req_t *req)
     return send_result(req, err, err == ESP_ERR_INVALID_STATE ? "autofocus not enabled" : NULL);
 }
 
+// GET ?reg=0x3029 reads a sensor register; POST {"reg":..,"value":..} writes one.
+static esp_err_t camera_reg_get(httpd_req_t *req)
+{
+    char q[48] = "", v[16] = "";
+    httpd_req_get_url_query_str(req, q, sizeof(q));
+    if (httpd_query_key_value(q, "reg", v, sizeof(v)) != ESP_OK) {
+        return send_result(req, ESP_ERR_INVALID_ARG, "expected ?reg=<address>");
+    }
+    int reg = (int)strtol(v, NULL, 0), val = cam_mgr_reg_read(reg);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "reg", reg);
+    cJSON_AddNumberToObject(o, "value", val);
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t camera_reg_post(httpd_req_t *req)
+{
+    cJSON *b = read_json_body(req);
+    const cJSON *r = b ? cJSON_GetObjectItem(b, "reg") : NULL, *v = b ? cJSON_GetObjectItem(b, "value") : NULL;
+    esp_err_t e = ESP_ERR_INVALID_ARG;
+    if (cJSON_IsNumber(r) && cJSON_IsNumber(v) && v->valueint >= 0 && v->valueint <= 255) {
+        e = cam_mgr_reg_write(r->valueint, v->valueint);
+    } else if (cJSON_IsString(cJSON_GetObjectItem(b, "action")) && !strcmp(cJSON_GetObjectItem(b, "action")->valuestring, "af_reset")) {
+        cam_mgr_af_reset();
+        e = ESP_OK;
+    }
+    cJSON_Delete(b);
+    return send_result(req, e, e == ESP_ERR_INVALID_ARG ? "expected {\"reg\":n,\"value\":0..255}" : NULL);
+}
+
 static esp_err_t snapshot_get(httpd_req_t *req)
 {
     cam_frame_t *f = cam_mgr_snapshot(pdMS_TO_TICKS(5000));
@@ -767,6 +799,33 @@ static esp_err_t sd_action_post(httpd_req_t *req)
     esp_err_t e = a ? sd_mgr_action(a, err, sizeof(err)) : ESP_ERR_INVALID_ARG;
     cJSON_Delete(body);
     return send_result(req, e, err[0] ? err : (a ? NULL : "expected {\"action\": ...}"));
+}
+
+/* ------------------------------------------------------------------ API: config backup ----- */
+
+static esp_err_t config_export_get(httpd_req_t *req)
+{
+    char q[32] = "", v[4] = "";
+    httpd_req_get_url_query_str(req, q, sizeof(q));
+    httpd_query_key_value(q, "secrets", v, sizeof(v));
+    char disp[80];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"%s-config.json\"", g_wifi_cfg.hostname);
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+    return send_json(req, backup_export(v[0] == '1'), NULL);
+}
+
+static esp_err_t config_import_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    const cJSON *fmt = body ? cJSON_GetObjectItem(body, "format") : NULL;
+    if (!cJSON_IsString(fmt) || strcmp(fmt->valuestring, "esp32-camera-config") != 0) {
+        cJSON_Delete(body);
+        return send_result(req, ESP_ERR_INVALID_ARG, "not a configuration backup of this firmware");
+    }
+    cJSON *r = backup_import(body);
+    cJSON_Delete(body);
+    cJSON_AddBoolToObject(r, "ok", cJSON_GetArraySize(cJSON_GetObjectItem(r, "errors")) == 0);
+    return send_json(req, r, NULL);
 }
 
 static esp_err_t stats_get(httpd_req_t *req)
@@ -1109,6 +1168,8 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/camera/save", HTTP_POST, camera_save_post);
     reg(s_api, "/api/camera/defaults", HTTP_POST, camera_defaults_post);
     reg(s_api, "/api/camera/af", HTTP_POST, camera_af_post);
+    reg(s_api, "/api/camera/reg", HTTP_GET, camera_reg_get);
+    reg(s_api, "/api/camera/reg", HTTP_POST, camera_reg_post);
     reg(s_api, "/api/camera/scan", HTTP_GET, camera_scan_get);
     reg(s_api, "/api/wifi", HTTP_GET, wifi_get);
     reg(s_api, "/api/wifi", HTTP_POST, wifi_post);
@@ -1124,6 +1185,8 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/sd", HTTP_POST, sd_post);
     reg(s_api, "/api/sd/files", HTTP_GET, sd_files_get);
     reg(s_api, "/api/sd/action", HTTP_POST, sd_action_post);
+    reg(s_api, "/api/config/export", HTTP_GET, config_export_get);
+    reg(s_api, "/api/config/import", HTTP_POST, config_import_post);
     reg(s_api, "/api/stats", HTTP_GET, stats_get);
     reg(s_api, "/api/stats/reset", HTTP_POST, stats_reset_post);
     reg(s_api, "/api/ai", HTTP_GET, ai_get);

@@ -486,6 +486,14 @@ const char *llm_mgr_state(void)
     return s_state;
 }
 
+cJSON *llm_mgr_config_export(bool secrets)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    cJSON *o = config_json(&s_cfg, secrets);
+    xSemaphoreGive(s_lock);
+    return o;
+}
+
 cJSON *llm_mgr_config_json(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);

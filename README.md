@@ -36,7 +36,7 @@ Ploča se bira u Kconfig-u (`menuconfig` → *ESP32 Camera board* → *Board*). 
 
 ### Ploča 1: ESP32-WROVER-DEV v1.6 + OV5640
 
-- OV5640 na SCCB adresi 0x3C, sa autofokusom: Camera tab → *Autofocus* (kontinualno ili jednokratno) i dugme *Focus now*.
+- OV5640 na SCCB adresi 0x3C, sa autofokusom: Camera tab → *Autofocus*. **Continuous** stalno drži fokus (prvo fokusiranje ~1,5–3 s, a kad se scena promeni, traži ponovo); **Single** drži sočivo, a dugme *Focus now* fokusira jednom (~3 s). Komande AF mikrokontroleru firmware šalje sam, po standardnom OV5640 redosledu: drajver esp32-camera odustaje posle 2 s, a senzoru treba ~4 s. Radi samo na modulima sa motorom za fokus (VCM).
 - Pinout je WROVER-KIT/Freenove: XCLK 21, SDA 26, SCL 27, D7..D0 = 35, 34, 39, 36, 19, 18, 5, 4, VSYNC 25, HREF 23, PCLK 22, PWDN i RESET nisu povezani.
 - Statusni LED na GPIO 2.
 - Ploča nema SD slot. Pinovi koje WROVER-KIT koristi za SD zauzeti su kamerom (GPIO 4), pa bi microSD tražio SPI modul na slobodnim pinovima.
@@ -110,6 +110,9 @@ Zaštita je uključena od prvog pokretanja. Dok je inicijalna lozinka aktivna, w
 | GET/POST | `/api/wifi` | Wi-Fi podešavanja |
 | GET | `/api/wifi/scan` | Skeniranje mreža |
 | GET | `/api/camera/scan` | Sken SCCB magistrale (dijagnostika kamere) |
+| GET/POST | `/api/camera/reg` | Čitanje (`?reg=0x3029`) i upis (`{"reg":..,"value":..}`) registra senzora, za napredno podešavanje |
+| GET | `/api/config/export[?secrets=1]` | Rezervna kopija podešavanja (JSON fajl) |
+| POST | `/api/config/import` | Vraćanje podešavanja iz rezervne kopije |
 | GET/POST | `/api/sd` | microSD: podešavanja i stanje kartice (samo ESP32-CAM) |
 | GET | `/api/sd/files?dir=X` | Sadržaj foldera na kartici |
 | GET | `/api/sd/files?path=X[&dl=1]` | Fajl sa kartice (`dl=1` = preuzimanje) |
@@ -245,6 +248,14 @@ Tab **Storage** (spec §18, §19). Na WROVER ploči tab samo kaže da ploča nem
 - **Fajlovi:** pregled po folderima, dugme *Download* pored svakog fajla i *Download ZIP* za folder. ZIP se pravi u hodu, bez kompresije, jer su JPEG-ovi već kompresovani.
 - **Eject (safe removal)** pre vađenja kartice, **Mount** posle ubacivanja, **Format card** briše celu karticu (traži potvrdu).
 - Događaji `sd_inserted` / `sd_removed` / `timelapse_done`; HA senzori „SD card“ i „SD free“.
+
+## Rezervna kopija podešavanja
+
+System tab → *Configuration backup* (spec §27):
+- **Export** preuzima jedan JSON fajl sa podešavanjima kamere, detekcije pokreta, lokalne detekcije osobe, AI-ja, LLM opisa, MQTT-a, Wi-Fi-ja, microSD-a i imenom uređaja.
+- Lozinke, tokeni i ključevi (Wi-Fi, MQTT, AI token, LLM ključ) ulaze **samo ako se štiklira** *include passwords*.
+- **Import** vraća sve sekcije iz fajla i javlja šta je primenjeno. Bez lozinke u fajlu, sačuvane lozinke ostaju; Wi-Fi se menja samo ako je u fajlu lozinka ili ista mreža.
+- Podešavanja prijave (korisnik, lozinka web UI-ja, API token) se **nikad** ne izvoze ni uvoze, pa vraćena kopija ne može da zaključa pristup. Izbor modula kamere se takođe ne prenosi, jer zavisi od ploče.
 
 ## Statistika
 

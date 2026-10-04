@@ -1,6 +1,7 @@
 idf_component_register(SRCS "main.c"
                             "ai_mgr.c"
                             "auth_mgr.c"
+                            "backup.c"
                             "mqtt_mgr.c"
                             "app_config.c"
                             "camera_mgr.c"

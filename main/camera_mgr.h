@@ -56,6 +56,12 @@ int cam_mgr_apply_json(const cJSON *obj, char *err, size_t err_len);
 esp_err_t cam_mgr_save(void);
 esp_err_t cam_mgr_restore_defaults(void);
 esp_err_t cam_mgr_af_trigger(void);
+// Raw sensor register access (advanced tuning / diagnostics). reg is the driver's register
+// address (OV5640: 16-bit, OV2640: bank << 8 | reg). Returns the value or -1.
+int cam_mgr_reg_read(int reg);
+esp_err_t cam_mgr_reg_write(int reg, int value);
+// Drops the loaded autofocus firmware so the next AF use reloads it (resets the AF MCU).
+void cam_mgr_af_reset(void);
 // Deinit + init of the camera driver (watchdog action, also exposed via MQTT/HA).
 esp_err_t cam_mgr_restart(void);
 // Stops the camera driver completely (e.g. during OTA: camera DMA/interrupts and long flash

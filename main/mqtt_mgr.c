@@ -837,6 +837,19 @@ const char *mqtt_mgr_ha_state(void)
     return s_discovery_sent ? "ok" : "connecting";
 }
 
+cJSON *mqtt_mgr_config_export(bool secrets)
+{
+    cJSON *o = mqtt_mgr_config_json();
+    const char *live[] = {"state", "ha_state", "last_error", "device_id", "topic_base", "has_password"};
+    for (size_t i = 0; i < sizeof(live) / sizeof(live[0]); i++) {
+        cJSON_DeleteItemFromObject(o, live[i]);
+    }
+    if (secrets) {
+        cJSON_AddStringToObject(o, "pass", s_cfg.pass);
+    }
+    return o;
+}
+
 cJSON *mqtt_mgr_config_json(void)
 {
     cJSON *o = cJSON_CreateObject();

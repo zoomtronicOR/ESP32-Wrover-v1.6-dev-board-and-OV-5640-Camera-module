@@ -627,6 +627,14 @@ const char *ai_mgr_last_object(void)
     return s_last_object;
 }
 
+cJSON *ai_mgr_config_export(bool secrets)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    cJSON *o = config_json(&s_cfg, secrets);
+    xSemaphoreGive(s_lock);
+    return o;
+}
+
 cJSON *ai_mgr_config_json(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
