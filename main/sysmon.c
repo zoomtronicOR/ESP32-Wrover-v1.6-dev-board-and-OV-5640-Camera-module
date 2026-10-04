@@ -6,6 +6,7 @@
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
+#include "esp_image_format.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -161,6 +162,20 @@ static const char *ota_state_name(esp_ota_img_states_t st)
     }
 }
 
+// Size of the running app image (read from flash once).
+static uint32_t app_image_size(const esp_partition_t *p)
+{
+    static uint32_t size;
+    if (!size && p) {
+        esp_partition_pos_t pos = {.offset = p->address, .size = p->size};
+        esp_image_metadata_t md;
+        if (esp_image_get_metadata(&pos, &md) == ESP_OK) {
+            size = md.image_len;
+        }
+    }
+    return size;
+}
+
 cJSON *sysmon_module_json(void)
 {
     cJSON *o = cJSON_CreateObject();
@@ -180,6 +195,8 @@ cJSON *sysmon_module_json(void)
         cJSON_AddStringToObject(o, "wifi_phy", phy < sizeof(names) / sizeof(names[0]) ? names[phy] : "?");
     }
 
+    cJSON_AddNumberToObject(o, "heap_total", heap_caps_get_total_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(o, "dma_heap_total", heap_caps_get_total_size(MALLOC_CAP_DMA));
     cJSON_AddNumberToObject(o, "dma_heap_free", heap_caps_get_free_size(MALLOC_CAP_DMA));
     cJSON_AddNumberToObject(o, "dma_heap_largest", heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     cJSON_AddNumberToObject(o, "psram_min_free", heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
@@ -197,6 +214,8 @@ cJSON *sysmon_module_json(void)
     esp_ota_img_states_t st;
     cJSON *ota = cJSON_AddObjectToObject(o, "ota");
     cJSON_AddStringToObject(ota, "running", run ? run->label : "?");
+    cJSON_AddNumberToObject(ota, "app_size", app_image_size(run));
+    cJSON_AddNumberToObject(ota, "partition_size", run ? run->size : 0);
     cJSON_AddStringToObject(ota, "next", next ? next->label : "?");
     cJSON_AddStringToObject(ota, "state", run && esp_ota_get_state_partition(run, &st) == ESP_OK ? ota_state_name(st) : "factory");
     return o;

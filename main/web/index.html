@@ -73,6 +73,9 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 #authwarn{display:none;background:var(--warn);color:#fff;padding:6px 16px;font-size:13px}
 #authwarn a{color:#fff}
 progress{width:100%;height:14px}
+.res{display:grid;grid-template-columns:minmax(90px,130px) minmax(0,1fr) minmax(110px,auto);gap:7px 10px;align-items:center;font-size:13px}
+.res .bar{height:10px;border-radius:5px;background:var(--bg);overflow:hidden}.res .bar i{display:block;height:100%;border-radius:5px;background:var(--ok);transition:width .4s}
+.res .bar i.warn{background:var(--warn)}.res .bar i.bad{background:var(--bad)}.res .val{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:8px 14px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw}
 #toast.show{opacity:1}
 .scan li{cursor:pointer;padding:3px 0}.scan li:hover{color:var(--accent)}
@@ -322,11 +325,14 @@ progress{width:100%;height:14px}
       <p class="muted" style="margin:0 0 6px">For Home Assistant and scripts: header <code>Authorization: Bearer &lt;token&gt;</code> or <code>?token=&lt;token&gt;</code>. Snapshot/stream URLs also accept the user name and password (HTTP Basic), e.g. in HA "Generic camera".</p>
       <div class="toolbar" style="margin:0"><code id="sec_token" style="word-break:break-all">••••</code><button class="b sec" id="tokshow">Show</button><button class="b sec" id="tokregen">Regenerate</button></div>
     </div>
+    <div>
+    <div class="card"><h2>Resources</h2><div class="res" id="restable"><span class="muted">loading…</span></div></div>
     <div class="card"><h2>Firmware update (OTA)</h2><table id="otatable"></table>
       <div class="toolbar"><input type="file" id="otafile" accept=".bin"><button class="b" id="otabtn">Upload &amp; install</button></div>
       <progress id="otaprog" value="0" max="100" style="display:none"></progress>
       <p class="muted" id="otamsg">Use <code>.pio/build/wrover/firmware.bin</code>. The camera validates the image, switches to it and reboots; if the new firmware does not boot it rolls back automatically.</p>
       <button class="b sec" id="rollbackbtn">Roll back to previous firmware</button>
+    </div>
     </div>
   </div>
   <div class="cols">
@@ -967,7 +973,34 @@ async function loadTelemetry() {
       trow('OTA', `running ${m.ota.running} (${m.ota.state}), next ${m.ota.next}`),
       trow('Time', status && status.time ? `${status.time} (${status.time_source})` : 'not synced'),
     ].join('');
+    renderResources(t);
   } catch (e) {}
+}
+
+// Resource bars: share used, green < 70 %, amber < 90 %, red above (Wi-Fi: signal quality, inverted).
+function renderResources(t) {
+  const s = status, m = t.module, c = t.camera;
+  if (!s) return;
+  const used = (total, free) => total ? (total - free) / total * 100 : 0;
+  const rssiQ = s.wifi.connected ? Math.max(0, Math.min(100, 2 * (s.wifi.rssi + 100))) : 0;
+  const rows = [
+    ['CPU core 0', s.cpu[0], s.cpu[0] + '%'],
+    ['CPU core 1', s.cpu[1], s.cpu[1] + '%'],
+    ['Internal RAM', used(m.heap_total, s.heap), `${fmtBytes(m.heap_total - s.heap)} / ${fmtBytes(m.heap_total)}`],
+    ['RAM peak', used(m.heap_total, s.heap_min), `${fmtBytes(m.heap_total - s.heap_min)} max`],
+    ['DMA RAM', used(m.dma_heap_total, m.dma_heap_free), `${fmtBytes(m.dma_heap_total - m.dma_heap_free)} / ${fmtBytes(m.dma_heap_total)}`],
+    ['PSRAM', used(s.psram_total, s.psram_free), `${fmtBytes(s.psram_total - s.psram_free)} / ${fmtBytes(s.psram_total)}`],
+    ['PSRAM peak', used(s.psram_total, m.psram_min_free), `${fmtBytes(s.psram_total - m.psram_min_free)} max`],
+    ['App partition', m.ota.partition_size ? m.ota.app_size / m.ota.partition_size * 100 : 0, `${fmtBytes(m.ota.app_size)} / ${fmtBytes(m.ota.partition_size)}`],
+    ['NVS entries', m.nvs ? m.nvs.used_entries / (m.nvs.used_entries + m.nvs.free_entries) * 100 : 0, m.nvs ? `${m.nvs.used_entries} / ${m.nvs.used_entries + m.nvs.free_entries}` : '—'],
+    ['Frame pool', c.frame_pool.in_use / c.frame_pool.slots * 100, `${c.frame_pool.in_use} / ${c.frame_pool.slots} slots`],
+    ['Stream clients', s.camera.stream_clients / (s.camera.stream_max || 3) * 100, `${s.camera.stream_clients} / ${s.camera.stream_max || 3}`],
+    ['Wi-Fi signal', rssiQ, s.wifi.connected ? `${s.wifi.rssi} dBm` : 'offline', true],
+  ];
+  $('restable').innerHTML = rows.map(([k, pct, txt, inv]) => {
+    const p = Math.max(0, Math.min(100, pct)), lvl = inv ? (p < 30 ? 'bad' : p < 50 ? 'warn' : '') : (p >= 90 ? 'bad' : p >= 70 ? 'warn' : '');
+    return `<span>${k}</span><div class="bar" title="${Math.round(p)}%"><i class="${lvl}" style="width:${p.toFixed(1)}%"></i></div><span class="val">${esc(txt)}</span>`;
+  }).join('');
 }
 
 /* ---------- system ---------- */

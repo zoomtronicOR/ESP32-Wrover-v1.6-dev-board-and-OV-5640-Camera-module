@@ -176,6 +176,7 @@ cJSON *web_status_json(void)
     cJSON_AddNumberToObject(c, "quality", cam.quality);
     cJSON_AddNumberToObject(c, "frame_bytes", cam.last_len);
     cJSON_AddNumberToObject(c, "stream_clients", s_stream_clients);
+    cJSON_AddNumberToObject(c, "stream_max", MAX_STREAM_CLIENTS);
 
     cJSON_AddItemToObject(o, "motion", motion_mgr_state_json());
     cJSON_AddItemToObject(o, "ai", ai_mgr_state_json());
