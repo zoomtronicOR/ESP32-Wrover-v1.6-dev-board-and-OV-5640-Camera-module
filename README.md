@@ -24,7 +24,7 @@ Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](do
 | PlatformIO okruženje | `wrover` (podrazumevano) | `esp32cam` |
 | Čip | ESP32-D0WDQ6 rev 1 | ESP32-D0WDQ6 rev 1 |
 | Flash / PSRAM | 8 MB / 4 MB | 4 MB / 4 MB (čip od 8 MB, mapirano 4 MB) |
-| Kamera | OV5640, 5 MP, **sa autofokusom** | OV2640, 2 MP (UXGA), fiksni fokus |
+| Kamera | OV5640, **sa autofokusom**, rezolucija do 2048×1536 (3 MP) | OV2640, rezolucija do 1600×1200 (UXGA), fiksni fokus |
 | Particije | `partitions.csv`: 2 × 3 MB OTA, coredump, storage | `partitions_4mb.csv`: 2 × 1,875 MB OTA, coredump |
 | Statusni LED | GPIO 2 | GPIO 33 (crveni, aktivan na niskom nivou) |
 | microSD | nema slota | ugrađen slot (SDMMC 1-bit): slike događaja, timelapse, preuzimanje |
@@ -66,7 +66,11 @@ pio device monitor -e esp32cam      # serijska konzola, 115200
 
 ### Modul kamere
 
-Na tabu **Camera**, kartica *Camera module*, bira se koji je modul utaknut: **Auto** (OV5640 na WROVER-u, OV2640 na ESP32-CAM-u), **OV5640 (5 MP)** ili **OV2640 (2 MP)**. Izbor određuje veličinu JPEG bafera, a promena restartuje drajver kamere. Ako se izabrani modul razlikuje od onog koji drajver pronađe, Camera tab prikazuje upozorenje. Podešavanja koja senzor ne podržava (npr. autofokus na OV2640) automatski se skrivaju.
+Na tabu **Camera**, kartica *Camera module*, bira se koji je modul utaknut: **Auto** (OV5640 na WROVER-u, OV2640 na ESP32-CAM-u), **OV5640** ili **OV2640**. Oba modula rade na obe ploče. Veličinu JPEG bafera određuje senzor koji drajver stvarno pronađe: ako se razlikuje od izabranog, drajver se jednom ponovo pokreće sa pravim baferima, a Camera tab prikazuje upozorenje.
+
+**Najveća rezolucija:** OV5640 do **2048×1536 (3 MP)**, OV2640 do **1600×1200**. ESP32 ima samo 4 MB PSRAM-a: na 2560×1440 i 2560×1920 frejmovi povremeno ne stižu (ponestane PSRAM-a i internog DMA RAM-a, ploča može da se zaglavi), a puni 2592×1944 ne daje nijedan frejm ni na jednom XCLK taktu. Veće rezolucije se zato ne nude, a ranije sačuvana veća vrednost se spušta na najveću dozvoljenu.
+
+JPEG baferi drajvera prate **trenutnu** rezoluciju: izbor veće rezolucije restartuje drajver jednom (~0,5 s), a od 1920×1080 naviše drajver koristi jedan bafer. Slike događaja u RAM-u imaju budžet od 1 MB (najnovije, najviše 12). Podešavanja koja senzor ne podržava (npr. autofokus na OV2640) automatski se skrivaju.
 
 ### Kamera se ne javlja
 

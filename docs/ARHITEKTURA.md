@@ -61,7 +61,7 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Podržane su dve
 | `coredump` | 64 KB | 64 KB | zapis o padu |
 | `storage` | 1,8 MB | — | neiskorišćeno na WROVER-u; ESP32-CAM snima na microSD karticu |
 
-PSRAM (4 MB): JPEG baferi kamere (inicijalizovani za 5 MP na OV5640, odnosno UXGA na OV2640), frame hub, dnevnik događaja sa snapshot-ima, baferi za detekciju pokreta, radna memorija TFLite modela (160 KB).
+PSRAM (4 MB): JPEG baferi kamere (veličine za trenutnu rezoluciju; veća rezolucija restartuje drajver, od Full HD jedan bafer), frame hub (slotovi rastu sa frejmom i oslobađaju se pri restartu drajvera), slike događaja (najviše 12 i 1 MB), frame hub, dnevnik događaja sa snapshot-ima, baferi za detekciju pokreta, radna memorija TFLite modela (160 KB).
 
 ## Dodavanje novog podešavanja kamere
 

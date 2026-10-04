@@ -18,6 +18,7 @@ static const char *TAG = "event";
 
 #define EVENTS_MAX     64   // records kept in RAM
 #define SNAPSHOTS_MAX  12   // newest events that keep their JPEG (PSRAM)
+#define SNAPSHOT_BUDGET (1024 * 1024)  // and at most this many bytes: 5 MP frames are ~600 KB each
 #define QUEUE_LEN      16
 
 typedef struct {
@@ -138,13 +139,19 @@ static void free_record(record_t *r)
     memset(r, 0, sizeof(*r));
 }
 
-// Keeps only the newest SNAPSHOTS_MAX JPEGs. Caller holds s_lock.
+// Keeps only the newest SNAPSHOTS_MAX JPEGs within SNAPSHOT_BUDGET bytes (the newest one is
+// always kept). Caller holds s_lock.
 static void trim_snapshots(void)
 {
     int kept = 0;
+    size_t bytes = 0;
     for (int i = 1; i <= EVENTS_MAX; i++) {
         record_t *r = &s_ring[(s_head - i + EVENTS_MAX) % EVENTS_MAX];
-        if (r->jpg && ++kept > SNAPSHOTS_MAX) {
+        if (!r->jpg) {
+            continue;
+        }
+        bytes += r->jpg_len;
+        if (++kept > SNAPSHOTS_MAX || (kept > 1 && bytes > SNAPSHOT_BUDGET)) {
             heap_caps_free(r->jpg);
             r->jpg = NULL;
             r->jpg_len = 0;

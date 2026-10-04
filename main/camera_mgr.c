@@ -27,9 +27,18 @@ static const char *TAG = "camera";
 #define STANDBY_AFTER_US   (10 * 1000000LL)  // idle time before the sensor is powered down
 #define WAKE_SETTLE_US     (400 * 1000LL)    // frames dropped after wake while AEC/AWB settle
 #define OV5640_SYS_CTRL0   0x3008
-// Camera module ("sensor" setting): sizes the JPEG buffers for the module's largest frame once,
-// so any later resolution fits without a driver restart. Auto = the board's usual module.
+// Camera module ("sensor" setting): sizes the JPEG buffers for the module's largest usable frame
+// once, so any later resolution fits without a driver restart. Auto = the board's usual module.
 enum { SENSOR_AUTO, SENSOR_OV5640, SENSOR_OV2640 };
+// Largest resolution per sensor. OV5640: QXGA 2048x1536 (3 MP). Measured on the ESP32 with 4 MB
+// PSRAM and motion/person/AI running: 2048x1536 is reliable; 2560x1440 and 2560x1920 fail
+// intermittently (PSRAM and internal DMA RAM run out, the board can hang), and the full
+// 2592x1944 never delivers a frame at any XCLK (10-20 MHz). OV2640: UXGA.
+#define OV5640_MAX_FRAMESIZE FRAMESIZE_QXGA
+#define OV2640_MAX_FRAMESIZE FRAMESIZE_UXGA
+// PSRAM is only 4 MB: the JPEG buffers are sized for the current resolution (a larger one
+// restarts the driver once), and from Full HD up the driver keeps a single buffer.
+#define SINGLE_FB_FROM       FRAMESIZE_FHD
 #if CONFIG_CAM_BOARD_AI_THINKER
 #define BOARD_SENSOR       SENSOR_OV2640
 #else
@@ -116,7 +125,7 @@ static const char *const OPT_EFFECT[] = {"None", "Negative", "Grayscale", "Red t
 static const char *const OPT_WB[] = {"Auto", "Sunny", "Cloudy", "Office", "Home"};
 static const char *const OPT_GAINCEIL[] = {"2x", "4x", "8x", "16x", "32x", "64x", "128x"};
 static const char *const OPT_AF[] = {"Off", "Continuous", "Single (trigger)"};
-static const char *const OPT_SENSOR[] = {"Auto (board default)", "OV5640 (5 MP)", "OV2640 (2 MP)"};
+static const char *const OPT_SENSOR[] = {"Auto (board default)", "OV5640 (up to 2048x1536)", "OV2640 (up to 1600x1200)"};
 
 static const param_def_t PARAMS[P_COUNT] = {
     [P_FRAMESIZE]      = {"framesize", "Resolution", "stream", PT_ENUM, 0, FRAMESIZE_5MP, FRAMESIZE_SVGA, NULL, ap_framesize, 0},
@@ -177,6 +186,8 @@ static EventGroupHandle_t s_hub_events;
 static TaskHandle_t s_task;
 
 static cam_frame_t s_slots[FRAME_SLOTS];
+static framesize_t s_init_size;  // frame size the driver buffers were sized for
+static int s_init_fb;            // frame buffers in use
 static cam_frame_t *s_latest;
 static uint32_t s_seq;
 static volatile int s_consumers;
@@ -270,6 +281,7 @@ static void adapt_to_sensor(sensor_t *s)
     }
     s_pid = s->id.PID;
     if (s_pid == OV5640_PID) {
+        s_max[P_FRAMESIZE] = OV5640_MAX_FRAMESIZE;
         s_min[P_BRIGHTNESS] = -3; s_max[P_BRIGHTNESS] = 3;
         s_min[P_CONTRAST] = -3;   s_max[P_CONTRAST] = 3;
         s_min[P_SATURATION] = -4; s_max[P_SATURATION] = 4;
@@ -286,11 +298,26 @@ static void adapt_to_sensor(sensor_t *s)
     }
     // Values outside this sensor's range (e.g. a generic default, or a value saved for another
     // sensor) fall back to the sensor default rather than being clamped to an edge of the range.
+    // A resolution above the cap (e.g. saved before the cap existed) becomes the largest allowed.
+    if (s_val[P_FRAMESIZE] > s_max[P_FRAMESIZE]) {
+        s_val[P_FRAMESIZE] = s_max[P_FRAMESIZE];
+    }
     for (int i = 0; i < P_COUNT; i++) {
         if (s_val[i] < s_min[i] || s_val[i] > s_max[i]) {
             s_val[i] = s_def[i];
         }
     }
+}
+
+// Largest frame a sensor PID may produce.
+static framesize_t sensor_cap(uint16_t pid)
+{
+    return pid == OV2640_PID ? OV2640_MAX_FRAMESIZE : pid == OV5640_PID ? OV5640_MAX_FRAMESIZE : FRAMESIZE_UXGA;
+}
+
+static framesize_t min_fs(int a, framesize_t b)
+{
+    return a < (int)b ? (framesize_t)a : b;
 }
 
 /* ------------------------------------------------------------------ autofocus ------------- */
@@ -377,6 +404,10 @@ static int sensor_model(void)
 
 static esp_err_t driver_start(void)
 {
+    // Buffers for the current resolution (at least SVGA), within the expected sensor's range.
+    framesize_t init_size = min_fs(s_val[P_FRAMESIZE] > FRAMESIZE_SVGA ? s_val[P_FRAMESIZE] : FRAMESIZE_SVGA,
+                                   sensor_cap(sensor_model() == SENSOR_OV2640 ? OV2640_PID : OV5640_PID));
+    int fb = init_size >= SINGLE_FB_FROM ? 1 : s_val[P_FB_COUNT];
     camera_config_t cfg = {
         .pin_pwdn = CONFIG_CAM_PIN_PWDN,
         .pin_reset = CONFIG_CAM_PIN_RESET,
@@ -398,11 +429,11 @@ static esp_err_t driver_start(void)
         .ledc_timer = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
         .pixel_format = PIXFORMAT_JPEG,
-        .frame_size = sensor_model() == SENSOR_OV2640 ? FRAMESIZE_UXGA : FRAMESIZE_5MP,
+        .frame_size = init_size,
         .jpeg_quality = s_val[P_QUALITY],
-        .fb_count = s_val[P_FB_COUNT],
+        .fb_count = fb,
         .fb_location = CAMERA_FB_IN_PSRAM,
-        .grab_mode = (s_val[P_GRAB_LATEST] && s_val[P_FB_COUNT] > 1) ? CAMERA_GRAB_LATEST : CAMERA_GRAB_WHEN_EMPTY,
+        .grab_mode = (s_val[P_GRAB_LATEST] && fb > 1) ? CAMERA_GRAB_LATEST : CAMERA_GRAB_WHEN_EMPTY,
     };
     esp_err_t err = esp_camera_init(&cfg);
     if (err != ESP_OK) {
@@ -410,11 +441,29 @@ static esp_err_t driver_start(void)
         return err;
     }
     sensor_t *s = esp_camera_sensor_get();
+    // The module in the socket decides the range: if the current resolution needs larger buffers
+    // than the expected module allowed (other module fitted), init once more.
+    framesize_t need = min_fs(s_val[P_FRAMESIZE] > FRAMESIZE_SVGA ? s_val[P_FRAMESIZE] : FRAMESIZE_SVGA,
+                              sensor_cap(s->id.PID));
+    if (need > init_size) {
+        init_size = need;
+        ESP_LOGW(TAG, "sensor PID 0x%04x needs %s buffers, re-initialising", s->id.PID, FRAMESIZE_NAMES[need]);
+        esp_camera_deinit();
+        cfg.frame_size = need;
+        err = esp_camera_init(&cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_camera_init failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        s = esp_camera_sensor_get();
+    }
+    s_init_size = cfg.frame_size;
+    s_init_fb = cfg.fb_count;
     s_af_ready = false;
     adapt_to_sensor(s);
     apply_all(s);
-    ESP_LOGI(TAG, "%s ready (PID 0x%04x), %s q=%d, xclk=%dMHz, fb=%d", s_sensor_name, s_pid,
-             FRAMESIZE_NAMES[s_val[P_FRAMESIZE]], s_val[P_QUALITY], s_val[P_XCLK], s_val[P_FB_COUNT]);
+    ESP_LOGI(TAG, "%s ready (PID 0x%04x), %s q=%d, xclk=%dMHz, fb=%d (buffers for %s)", s_sensor_name, s_pid,
+             FRAMESIZE_NAMES[s_val[P_FRAMESIZE]], s_val[P_QUALITY], s_val[P_XCLK], s_init_fb, FRAMESIZE_NAMES[s_init_size]);
     return ESP_OK;
 }
 
@@ -440,6 +489,20 @@ static esp_err_t driver_restart(const char *reason)
     if (s_ok) {
         esp_camera_deinit();
     }
+    // Give back hub slots grown for large frames (readers still holding a frame keep theirs).
+    xSemaphoreTake(s_hub_lock, portMAX_DELAY);
+    if (s_latest) {
+        s_latest->refs--;
+        s_latest = NULL;
+    }
+    for (int i = 0; i < FRAME_SLOTS; i++) {
+        if (s_slots[i].refs == 0 && s_slots[i].buf) {
+            heap_caps_free(s_slots[i].buf);
+            s_slots[i].buf = NULL;
+            s_slots[i].cap = 0;
+        }
+    }
+    xSemaphoreGive(s_hub_lock);
     s_restarts++;
     s_standby = false;
     event_post(EV_CAMERA_RESTART, NULL, s_restarts, reason, NULL);
@@ -459,6 +522,17 @@ static cam_frame_t *slot_take(size_t len)
         if (f->cap < len) {
             size_t cap = (len + SLOT_ALIGN - 1) / SLOT_ALIGN * SLOT_ALIGN;
             uint8_t *nb = heap_caps_realloc(f->buf, cap, MALLOC_CAP_SPIRAM);
+            if (!nb) {
+                // Large frames: give the memory of the other idle slots back and try once more.
+                for (int j = 0; j < FRAME_SLOTS; j++) {
+                    if (j != i && s_slots[j].refs == 0 && s_slots[j].buf) {
+                        heap_caps_free(s_slots[j].buf);
+                        s_slots[j].buf = NULL;
+                        s_slots[j].cap = 0;
+                    }
+                }
+                nb = heap_caps_realloc(f->buf, cap, MALLOC_CAP_SPIRAM);
+            }
             if (!nb) {
                 ESP_LOGW(TAG, "no PSRAM for %u byte frame", (unsigned)cap);
                 return NULL;
@@ -812,6 +886,12 @@ int cam_mgr_apply_json(const cJSON *obj, char *err, size_t err_len)
         if (PARAMS[i].flags & F_INIT) {
             restart |= (s_val[i] != v);
             s_val[i] = v;
+            continue;
+        }
+        if (i == P_FRAMESIZE && s_ok &&
+            (v > s_init_size || (v >= SINGLE_FB_FROM) != (s_init_fb == 1 && s_init_size >= SINGLE_FB_FROM))) {
+            s_val[i] = v;  // needs other buffers: the driver restarts with this resolution
+            restart = true;
             continue;
         }
         if (PARAMS[i].flags & F_LOCAL) {
