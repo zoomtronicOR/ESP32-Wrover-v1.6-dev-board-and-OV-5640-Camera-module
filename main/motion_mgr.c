@@ -29,6 +29,19 @@ static const char *TAG = "motion";
 #define LINE_MARGIN       25.0f  // hysteresis band around the line (0..1000 units)
 #define LINE_RESET_US     (3 * 1000000LL)  // blob lost this long: forget which side it was on
 
+// Tamper detection: the edge map of the grid is compared with a reference view taken during
+// quiet periods. Covered = edge energy collapses; moved = most reference edges are gone.
+#define TAMPER_COVER_PCT   25.0f  // edge energy below this share of the reference = covered
+#define TAMPER_MOVED_PCT   60.0f  // more reference edges lost than this = moved
+#define TAMPER_ALARM_US    (10 * 1000000LL)   // condition must hold this long before the alarm
+#define TAMPER_CLEAR_US    (3 * 1000000LL)    // view must look normal this long to clear
+#define TAMPER_ACCEPT_US   (300 * 1000000LL)  // alarm this long: accept the new view
+#define TAMPER_QUIET_US    (30 * 1000000LL)   // no motion / suspicion this long before a refresh
+#define TAMPER_REFRESH_US  (60 * 1000000LL)   // reference refresh interval
+#define TAMPER_MIN_ENERGY  1.5f   // mean gradient below this = featureless view (dark): no checks
+#define TAMPER_MIN_EDGES   40     // edge cells a usable reference needs
+#define TAMPER_DARK_LUMA   16     // mean luma below this: "covered" is reported as "dark"
+
 typedef struct {
     char name[24];
     int16_t x, y, w, h;  // 0..1000 of the frame
@@ -52,6 +65,7 @@ typedef struct {
     int nzones;
     zone_t zones[MOTION_MAX_ZONES];
     line_cfg_t line;
+    bool tamper;             // camera covered / moved detection
 } motion_cfg_t;
 
 typedef struct {
@@ -89,6 +103,18 @@ static int s_line_yday = -1;
 static bool s_line_last_in;
 static uint32_t s_analysed, s_scene_changes;
 static float s_analyse_ms;
+
+typedef enum { TS_OFF, TS_LEARNING, TS_OK, TS_SUSPECT, TS_ALARM } tamper_state_t;
+static const char *const TS_NAMES[] = {"off", "learning", "ok", "suspect", "alarm"};
+static uint8_t *s_tref, *s_tcur;  // edge maps (1 = edge cell)
+static int s_tref_w, s_tref_h, s_tref_edges;
+static float s_tref_energy;
+static bool s_tref_valid;
+static int64_t s_tref_us, s_t_since_us, s_t_cond_us;
+static tamper_state_t s_tstate;
+static char s_treason[12];
+static float s_t_energy_pct = 100, s_t_lost_pct;
+static uint32_t s_tamper_count;
 
 /* ------------------------------------------------------------------ config ---------------- */
 
@@ -136,12 +162,13 @@ static bool get_int(const cJSON *j, const char *key, int min, int max, int *out,
 
 static bool parse_config(const cJSON *j, motion_cfg_t *c, char *err, size_t err_len)
 {
-    int en = c->enabled, fps = c->fps, sens = c->sensitivity, area = c->min_area, trig = c->trigger_frames,
+    int en = c->enabled, tamper = c->tamper, fps = c->fps, sens = c->sensitivity, area = c->min_area, trig = c->trigger_frames,
         cool = c->cooldown_s, snap = c->snapshot, msnap = c->mqtt_snapshot;
     if (!get_int(j, "enabled", 0, 1, &en, err, err_len) || !get_int(j, "fps", 1, 10, &fps, err, err_len) ||
         !get_int(j, "sensitivity", 0, 100, &sens, err, err_len) || !get_int(j, "min_area", 1, 1000, &area, err, err_len) ||
         !get_int(j, "trigger_frames", 1, 10, &trig, err, err_len) || !get_int(j, "cooldown_s", 0, 600, &cool, err, err_len) ||
-        !get_int(j, "snapshot", 0, 1, &snap, err, err_len) || !get_int(j, "mqtt_snapshot", 0, 1, &msnap, err, err_len)) {
+        !get_int(j, "snapshot", 0, 1, &snap, err, err_len) || !get_int(j, "mqtt_snapshot", 0, 1, &msnap, err, err_len) ||
+        !get_int(j, "tamper", 0, 1, &tamper, err, err_len)) {
         return false;
     }
     const cJSON *line = cJSON_GetObjectItemCaseSensitive(j, "line");
@@ -197,6 +224,7 @@ static bool parse_config(const cJSON *j, motion_cfg_t *c, char *err, size_t err_
         c->nzones = n;
     }
     c->enabled = en;
+    c->tamper = tamper;
     c->fps = fps;
     c->sensitivity = sens;
     c->min_area = area;
@@ -218,6 +246,7 @@ static cJSON *config_json(const motion_cfg_t *c)
     cJSON_AddNumberToObject(o, "cooldown_s", c->cooldown_s);
     cJSON_AddBoolToObject(o, "snapshot", c->snapshot);
     cJSON_AddBoolToObject(o, "mqtt_snapshot", c->mqtt_snapshot);
+    cJSON_AddBoolToObject(o, "tamper", c->tamper);
     if (c->line.enabled) {
         cJSON *l = cJSON_AddObjectToObject(o, "line");
         cJSON_AddNumberToObject(l, "x1", c->line.x1);
@@ -328,6 +357,185 @@ static void line_update(const motion_cfg_t *c, int cx, int cy, int64_t now)
     s_line_side = side;
 }
 
+/* ------------------------------------------------------------------ tamper ---------------- */
+
+static inline int grad_at(int x, int y)
+{
+    int i = y * s_gw + x;
+    return abs((int)s_cur[i + 1] - s_cur[i]) + abs((int)s_cur[i + s_gw] - s_cur[i]);
+}
+
+// Marks the strongest gradients of the luma grid in map. The threshold follows the mean
+// gradient, so exposure changes do not reshape the map. Returns the mean gradient (edge energy).
+static float edge_map(uint8_t *map, int *edges, int *mean_luma)
+{
+    long sum = 0, lsum = 0;
+    for (int i = 0; i < s_gw * s_gh; i++) {
+        lsum += s_cur[i];
+    }
+    for (int y = 0; y < s_gh - 1; y++) {
+        for (int x = 0; x < s_gw - 1; x++) {
+            sum += grad_at(x, y);
+        }
+    }
+    float mean = (float)sum / ((s_gw - 1) * (s_gh - 1));
+    int thr = (int)(mean * 2);
+    thr = thr < 6 ? 6 : thr;
+    int e = 0;
+    memset(map, 0, s_gw * s_gh);
+    for (int y = 0; y < s_gh - 1; y++) {
+        for (int x = 0; x < s_gw - 1; x++) {
+            if (grad_at(x, y) >= thr) {
+                map[y * s_gw + x] = 1;
+                e++;
+            }
+        }
+    }
+    *edges = e;
+    *mean_luma = lsum / (s_gw * s_gh);
+    return mean;
+}
+
+// Share of reference edge cells with no current edge within one cell (small shake is tolerated).
+// Only lost edges count: new ones (objects added, lights switched on) do not.
+static float lost_edges_pct(void)
+{
+    int lost = 0, total = 0;
+    for (int y = 0; y < s_gh; y++) {
+        for (int x = 0; x < s_gw; x++) {
+            if (!s_tref[y * s_gw + x]) {
+                continue;
+            }
+            total++;
+            bool found = false;
+            for (int ny = y - 1; ny <= y + 1 && !found; ny++) {
+                for (int nx = x - 1; nx <= x + 1 && !found; nx++) {
+                    found = ny >= 0 && ny < s_gh && nx >= 0 && nx < s_gw && s_tcur[ny * s_gw + nx];
+                }
+            }
+            lost += !found;
+        }
+    }
+    return total ? lost * 100.0f / total : 0;
+}
+
+static void tamper_publish(bool on)
+{
+    char js[64];
+    snprintf(js, sizeof(js), "{\"state\":\"%s\",\"reason\":\"%s\"}", on ? "ON" : "OFF", on ? s_treason : "");
+    mqtt_mgr_publish_state("tamper", js, true);
+}
+
+static void tamper_take_ref(float energy, int edges, int64_t now)
+{
+    memcpy(s_tref, s_tcur, s_gw * s_gh);
+    s_tref_w = s_gw;
+    s_tref_h = s_gh;
+    s_tref_energy = energy;
+    s_tref_edges = edges;
+    s_tref_valid = true;
+    s_tref_us = now;
+}
+
+static void tamper_clear(const char *why)
+{
+    if (s_tstate == TS_ALARM) {
+        event_post(EV_TAMPER_CLEARED, NULL, 0, why, NULL);
+        tamper_publish(false);
+        ESP_LOGI(TAG, "tamper cleared: %s", why);
+    }
+    s_tstate = TS_OK;
+}
+
+// Restarts (or stops) tamper detection after a config change; an active alarm is cleared.
+static void tamper_reset(bool off)
+{
+    tamper_clear(off ? "disabled" : "reconfigured");
+    s_tstate = off ? TS_OFF : TS_LEARNING;
+    s_tref_valid = false;
+    s_t_energy_pct = 100;
+    s_t_lost_pct = 0;
+}
+
+static void tamper_update(cam_frame_t *f, int64_t now)
+{
+    int edges, luma;
+    float energy = edge_map(s_tcur, &edges, &luma);
+    if (!s_tref_valid || s_tref_w != s_gw || s_tref_h != s_gh) {
+        // First frame, new resolution, or the reference view was featureless (dark).
+        s_tref_valid = false;
+        if (s_tstate != TS_ALARM) {
+            s_tstate = TS_LEARNING;
+        }
+        if (energy >= TAMPER_MIN_ENERGY && edges >= TAMPER_MIN_EDGES) {
+            tamper_take_ref(energy, edges, now);
+            s_t_cond_us = now;
+        }
+        return;
+    }
+    if (s_tref_energy < TAMPER_MIN_ENERGY || s_tref_edges < TAMPER_MIN_EDGES) {
+        s_tref_valid = false;  // nothing to compare against: wait for a usable view
+        return;
+    }
+
+    s_t_energy_pct = energy * 100.0f / s_tref_energy;
+    s_t_lost_pct = lost_edges_pct();
+    bool lost = s_t_lost_pct > TAMPER_MOVED_PCT;
+    bool cond = s_t_energy_pct < TAMPER_COVER_PCT || lost;
+    // A hand or paper rarely drops the energy below 25 % at high gain (sensor noise keeps some
+    // gradient), so lost edges with halved energy count as covered too; a turned camera keeps
+    // its energy.
+    bool covered = s_t_energy_pct < TAMPER_COVER_PCT || (lost && s_t_energy_pct < TAMPER_COVER_PCT * 2);
+    if (cond) {
+        s_t_cond_us = now;
+        if (s_tstate != TS_ALARM) {
+            strlcpy(s_treason, covered ? (luma < TAMPER_DARK_LUMA ? "dark" : "covered") : "moved", sizeof(s_treason));
+        }
+    }
+
+    switch (s_tstate) {
+    case TS_OFF:
+    case TS_LEARNING:
+    case TS_OK:
+        if (cond) {
+            s_tstate = TS_SUSPECT;
+            s_t_since_us = now;
+        } else {
+            s_tstate = TS_OK;
+            // Quiet scene: refresh the reference so slow changes (daylight, moved furniture) follow.
+            if (!s_any_active && now - s_t_cond_us > TAMPER_QUIET_US && now - s_tref_us > TAMPER_REFRESH_US) {
+                tamper_take_ref(energy, edges, now);
+            }
+        }
+        break;
+    case TS_SUSPECT:
+        if (!cond) {
+            s_tstate = TS_OK;
+        } else if (now - s_t_since_us >= TAMPER_ALARM_US) {
+            s_tstate = TS_ALARM;
+            s_t_since_us = now;
+            s_tamper_count++;
+            char detail[48];
+            snprintf(detail, sizeof(detail), "%s, edges %d%%, lost %d%%", s_treason, (int)s_t_energy_pct,
+                     (int)s_t_lost_pct);
+            cam_mgr_frame_ref(f);  // handed over to the event engine (released there)
+            event_post(EV_TAMPER, NULL, covered ? s_t_energy_pct : s_t_lost_pct, detail, f);
+            tamper_publish(true);
+            ESP_LOGW(TAG, "tamper alarm: %s", detail);
+        }
+        break;
+    case TS_ALARM:
+        if (!cond && now - s_t_cond_us >= TAMPER_CLEAR_US) {
+            tamper_clear("restored");
+        } else if (now - s_t_since_us >= TAMPER_ACCEPT_US) {
+            tamper_take_ref(energy, edges, now);  // a featureless view is re-learned on the next frames
+            s_t_cond_us = now;
+            tamper_clear("new view accepted");
+        }
+        break;
+    }
+}
+
 /* ------------------------------------------------------------------ analysis -------------- */
 
 static bool alloc_buffers(void)
@@ -337,7 +545,9 @@ static bool alloc_buffers(void)
     s_cur = heap_caps_malloc(CELLS_MAX, MALLOC_CAP_SPIRAM);
     s_bg = heap_caps_malloc(CELLS_MAX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     s_diffq = heap_caps_calloc(CELLS_MAX, 1, MALLOC_CAP_SPIRAM);
-    return s_sum && s_cnt && s_cur && s_bg && s_diffq;
+    s_tref = heap_caps_malloc(CELLS_MAX, MALLOC_CAP_SPIRAM);
+    s_tcur = heap_caps_malloc(CELLS_MAX, MALLOC_CAP_SPIRAM);
+    return s_sum && s_cnt && s_cur && s_bg && s_diffq && s_tref && s_tcur;
 }
 
 // Decodes the JPEG at reduced scale and box-averages it into the s_cur luma grid.
@@ -577,10 +787,11 @@ static void motion_task(void *arg)
             s_reset_requested = false;
             end_all();
             s_bg_valid = false;
+            tamper_reset(!c.tamper);
         }
         xSemaphoreGive(s_lock);
 
-        if (!c.enabled) {
+        if (!c.enabled && !c.tamper) {
             if (consumer) {
                 cam_mgr_consumer_remove();
                 consumer = false;
@@ -589,7 +800,7 @@ static void motion_task(void *arg)
             continue;
         }
         if (!consumer) {
-            // Motion needs a continuous frame flow, which keeps the sensor out of standby.
+            // Motion / tamper need a continuous frame flow, which keeps the sensor out of standby.
             cam_mgr_consumer_add();
             consumer = true;
             s_bg_valid = false;
@@ -603,7 +814,12 @@ static void motion_task(void *arg)
         seq = f->seq;
         if (build_grid(f)) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
-            analyse(f, &c);
+            if (c.enabled) {
+                analyse(f, &c);
+            }
+            if (c.tamper) {
+                tamper_update(f, esp_timer_get_time());
+            }
             s_analysed++;
             xSemaphoreGive(s_lock);
         }
@@ -636,6 +852,11 @@ bool motion_mgr_active(void)
     return s_any_active;
 }
 
+const char *motion_mgr_tamper(void)
+{
+    return s_tstate == TS_ALARM ? s_treason : NULL;
+}
+
 cJSON *motion_mgr_config_json(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -660,6 +881,14 @@ cJSON *motion_mgr_state_json(void)
     cJSON_AddNumberToObject(ls, "in", s_line_in);
     cJSON_AddNumberToObject(ls, "out", s_line_out);
     cJSON_AddStringToObject(ls, "last", s_line_in + s_line_out ? (s_line_last_in ? "in" : "out") : "");
+    cJSON *ts = cJSON_AddObjectToObject(o, "tamper");
+    cJSON_AddBoolToObject(ts, "enabled", s_cfg.tamper);
+    cJSON_AddStringToObject(ts, "state", TS_NAMES[s_tstate]);
+    cJSON_AddStringToObject(ts, "reason", s_tstate >= TS_SUSPECT ? s_treason : "");
+    cJSON_AddNumberToObject(ts, "edge_pct", (int)s_t_energy_pct);
+    cJSON_AddNumberToObject(ts, "lost_pct", (int)s_t_lost_pct);
+    cJSON_AddNumberToObject(ts, "ref_age_s", s_tref_valid ? (int)((esp_timer_get_time() - s_tref_us) / 1000000) : -1);
+    cJSON_AddNumberToObject(ts, "alarms", s_tamper_count);
     zone_t zones[MOTION_MAX_ZONES];
     int nz = effective_zones(&s_cfg, zones);
     cJSON *arr = cJSON_AddArrayToObject(o, "zones");
@@ -692,8 +921,8 @@ esp_err_t motion_mgr_set_config(const cJSON *cfg, char *err, size_t err_len)
         snprintf(err, err_len, "saving failed: %s", esp_err_to_name(e));
         return e;
     }
-    ESP_LOGI(TAG, "config updated: %s, %d zone(s), sensitivity %d, min area %.1f%%", n.enabled ? "on" : "off",
-             n.nzones, n.sensitivity, n.min_area / 10.0);
+    ESP_LOGI(TAG, "config updated: %s, %d zone(s), sensitivity %d, min area %.1f%%, tamper %s",
+             n.enabled ? "on" : "off", n.nzones, n.sensitivity, n.min_area / 10.0, n.tamper ? "on" : "off");
     if (zones_changed) {
         mqtt_mgr_republish_discovery();  // zone binary sensors in Home Assistant
     }

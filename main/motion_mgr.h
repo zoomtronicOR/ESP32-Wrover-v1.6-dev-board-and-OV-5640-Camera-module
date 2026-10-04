@@ -13,6 +13,8 @@
 esp_err_t motion_mgr_init(void);
 
 bool motion_mgr_active(void);
+// Reason ("covered", "dark", "moved") while the tamper alarm is raised, otherwise NULL.
+const char *motion_mgr_tamper(void);
 // Config + live state for the web UI / API.
 cJSON *motion_mgr_config_json(void);
 cJSON *motion_mgr_state_json(void);

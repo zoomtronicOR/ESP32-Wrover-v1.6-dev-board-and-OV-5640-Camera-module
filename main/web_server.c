@@ -145,7 +145,7 @@ cJSON *web_status_json(void)
         time_t now = time(NULL);
         struct tm tm;
         localtime_r(&now, &tm);
-        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tm);
+        strftime(tbuf, sizeof(tbuf), "%d.%m.%Y %H:%M:%S", &tm);
     }
     cJSON_AddStringToObject(o, "time", tbuf);
     cJSON_AddStringToObject(o, "time_source", wifi.time_source);

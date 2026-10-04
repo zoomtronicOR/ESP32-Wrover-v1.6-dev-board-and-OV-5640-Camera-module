@@ -24,6 +24,7 @@ section{display:none}section.active{display:block}
 .card h2{font-size:14px;margin:0 0 10px;font-weight:600}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .metric{background:var(--bg);border-radius:6px;padding:8px 10px}
+.ind{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:13px}.ind span{display:inline-flex;align-items:center;gap:6px}.ind .dot{width:11px;height:11px}
 .metric .k{font-size:12px;color:var(--muted)}.metric .v{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
 .cols{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:14px}
 @media (max-width:800px){.cols{grid-template-columns:1fr}}
@@ -65,7 +66,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .ev img{width:96px;height:72px;object-fit:cover;border-radius:4px;background:#000}
 .ev .noimg{width:96px;height:72px;border-radius:4px;background:var(--bg);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px}
 .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--bg);margin-right:6px}
-.badge.motion_start,.badge.person_detected_local{background:#ff3b30;color:#fff}.badge.line_in,.badge.line_out{background:#0891b2;color:#fff}.badge.motion_end{background:var(--warn);color:#fff}
+.badge.motion_start,.badge.person_detected_local{background:#ff3b30;color:#fff}.badge.line_in,.badge.line_out{background:#0891b2;color:#fff}.badge.motion_end{background:var(--warn);color:#fff}.badge.tamper{background:#7c3aed;color:#fff}
 #login{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;z-index:20;padding:16px}
 #login .card{width:100%;max-width:340px}
 #login input{width:100%;margin-bottom:10px}
@@ -101,6 +102,7 @@ progress{width:100%;height:14px}
   <div class="cols">
     <div class="card"><h2>Preview</h2>
       <div class="viewer"><img id="dashimg" alt=""><span class="msg" id="dashmsg">loading…</span></div>
+      <div class="ind" id="dashind"></div>
     </div>
     <div class="card"><h2>Status</h2><div class="grid" id="metrics"></div></div>
   </div>
@@ -164,9 +166,10 @@ progress{width:100%;height:14px}
         <label>Cooldown (s)</label><input type="number" id="mo_cooldown_s" min="0" max="600">
         <label>Event snapshot</label><div><input type="checkbox" id="mo_snapshot" class="switch"></div>
         <label>Snapshot to MQTT</label><div><input type="checkbox" id="mo_mqtt_snapshot" class="switch"></div>
+        <label>Tamper detection</label><div><input type="checkbox" id="mo_tamper" class="switch"> <span class="muted">camera covered, blinded or turned away</span></div>
         <span></span><div><button class="b" type="submit">Save</button></div>
       </form>
-      <p class="muted">While enabled the sensor never enters standby (it needs a continuous frame flow), so it runs warmer.</p>
+      <p class="muted">Tamper detection compares the scene's edges with a reference view learned while it is quiet: alarm after 10 s, a new view is accepted after 5 min. Switching the lights off also reads as covered. While motion or tamper detection is enabled the sensor never enters standby (it needs a continuous frame flow), so it runs warmer.</p>
       <h2 style="margin-top:14px">Live</h2><table id="motstate"></table>
     </div>
   </div>
@@ -410,6 +413,7 @@ function renderStatus(s) {
     pill('PSRAM', s.psram_total ? (psramPct < 0.2 ? 'warn' : 'ok') : 'bad', fmtBytes(s.psram_free) + ' free') +
     pill('MQTT', s.modules.mqtt === 'connecting' ? 'warn' : mod(s.modules.mqtt), s.modules.mqtt) + pill('HA', s.modules.ha === 'connecting' ? 'warn' : mod(s.modules.ha), s.modules.ha) +
     pill('Motion', s.motion && s.motion.enabled ? (s.motion.active ? 'bad' : 'ok') : '', s.motion && s.motion.active ? 'motion!' : 'idle') +
+    (s.motion && s.motion.tamper && s.motion.tamper.enabled ? pill('Tamper', s.motion.tamper.state === 'alarm' ? 'bad' : s.motion.tamper.state === 'learning' ? 'warn' : 'ok', 'tamper: ' + (s.motion.tamper.state === 'alarm' ? s.motion.tamper.reason + '!' : s.motion.tamper.state)) : '') +
     pill('Person', s.person && s.person.state !== 'off' ? (s.person.present ? 'bad' : 'ok') : '', s.person ? 'local person: ' + (s.person.present ? 'present' : s.person.state) : '') +
     pill('SD', mod(s.modules.sd), 'Phase 6') + pill('AI', { ok: 'ok', idle: 'ok', error: 'bad' }[s.modules.ai] || '', 'AI ' + s.modules.ai);
   const c = s.camera;
@@ -421,6 +425,21 @@ function renderStatus(s) {
     ['PSRAM free', fmtBytes(s.psram_free) + ' / ' + fmtBytes(s.psram_total)], ['CPU load', s.cpu[0] + '% / ' + s.cpu[1] + '%'],
     ['Frames', c.frames], ['Cam errors', c.errors + ' (restarts ' + c.restarts + ')'], ['Time', s.time ? s.time + (s.time_source === 'browser' ? ' (browser)' : '') : 'not synced'], ['LED', s.led],
   ];
+  // Detection and integration modules.
+  const mo = s.motion || {}, tp = mo.tamper || {}, ln = mo.line || {}, pe = s.person || {}, ai = s.ai || {}, llm = s.llm || {};
+  m.push(['Motion', !mo.enabled ? 'off' : (mo.active ? 'MOTION' : 'idle') + ' · ' + mo.events_today + ' today'],
+    ['Tamper', !tp.enabled ? 'off' : tp.state === 'alarm' ? 'ALARM (' + tp.reason + ')' : tp.state],
+    ['Line IN / OUT', ln.enabled ? ln.in + ' / ' + ln.out : 'no line'],
+    ['Person (local)', pe.state === 'off' ? 'off' : (pe.present ? 'PRESENT' : pe.state) + ' · ' + pe.today + ' today'],
+    ['AI detection', ai.state === 'off' ? 'off' : ai.state + (ai.last_object ? ' · ' + ai.last_object : '')],
+    ['AI description', llm.state + (llm.requests ? ' · ' + llm.requests + ' sent' : '')],
+    ['MQTT', s.modules.mqtt], ['Home Assistant', s.modules.ha], ['SD card', s.modules.sd]);
+  const dot = (cls, label) => `<span><i class="dot ${cls}"></i>${esc(label)}</span>`;
+  $('dashind').innerHTML =
+    dot(!tp.enabled ? '' : tp.state === 'alarm' ? 'bad' : 'ok', !tp.enabled ? 'Tamper: off' : tp.state === 'alarm' ? 'Tamper: ' + tp.reason + '!' : 'Tamper: ok') +
+    dot(!mo.enabled ? '' : mo.active ? 'bad' : 'ok', 'Motion' + (!mo.enabled ? ': off' : mo.active ? '!' : '')) +
+    dot(pe.state === 'off' ? '' : pe.present ? 'bad' : 'ok', 'Person' + (pe.state === 'off' ? ': off' : pe.present ? '!' : '')) +
+    dot(ai.state === 'off' ? '' : ai.state === 'error' ? 'warn' : (ai.objects || []).some(o => o.present) ? 'bad' : 'ok', 'AI' + (ai.state === 'off' ? ': off' : (ai.objects || []).filter(o => o.present).map(o => ': ' + o.label).join('')));
   $('metrics').innerHTML = m.map(([k, v]) => `<div class="metric"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
   $('ovl-l').textContent = s.time || '';
   $('ovl-r').textContent = `${c.fps.toFixed(1)} fps · ${s.wifi.connected ? s.wifi.rssi + ' dBm' : 'AP'}`;
@@ -550,7 +569,7 @@ async function loadMotion() {
   const c = m.config;
   for (const k of ['fps', 'sensitivity', 'trigger_frames', 'cooldown_s']) $('mo_' + k).value = c[k];
   $('mo_min_area').value = (c.min_area / 10).toFixed(1);
-  for (const k of ['enabled', 'snapshot', 'mqtt_snapshot']) $('mo_' + k).checked = c[k];
+  for (const k of ['enabled', 'snapshot', 'mqtt_snapshot', 'tamper']) $('mo_' + k).checked = !!c[k];
   $('mo_sens_v').textContent = c.sensitivity;
   zones = c.zones.map(z => ({ ...z }));
   line = c.line ? { ...c.line } : null; $('lineInv').checked = !!(line && line.invert); lineMode = false; $('lineDraw').classList.remove('active');
@@ -562,7 +581,7 @@ $('motform').onsubmit = async e => {
   e.preventDefault();
   const body = { fps: +$('mo_fps').value, sensitivity: +$('mo_sensitivity').value, min_area: Math.round(+$('mo_min_area').value * 10),
     trigger_frames: +$('mo_trigger_frames').value, cooldown_s: +$('mo_cooldown_s').value,
-    enabled: $('mo_enabled').checked, snapshot: $('mo_snapshot').checked, mqtt_snapshot: $('mo_mqtt_snapshot').checked };
+    enabled: $('mo_enabled').checked, snapshot: $('mo_snapshot').checked, mqtt_snapshot: $('mo_mqtt_snapshot').checked, tamper: $('mo_tamper').checked };
   try { await api('/api/motion', body); toast('Motion settings saved'); loadMotionCfg(); } catch (x) { toast(x.message); }
 };
 function refreshZoneImage() { $('zimg').src = '/capture?t=' + Date.now(); }
@@ -632,7 +651,8 @@ function renderMotState() {
   const m = status && status.motion; if (!m) return;
   const rows = [['State', !m.enabled ? 'disabled' : m.active ? 'MOTION' : 'idle'], ['Changed area', m.changed_pct + '%'], ['Analysis time', m.analyse_ms + ' ms'],
     ['Frames analysed', m.analysed], ['Lighting changes ignored', m.scene_changes], ['Events today', m.events_today],
-    ['Line IN / OUT today', m.line && m.line.enabled ? `${m.line.in} / ${m.line.out}${m.line.last ? ' (last: ' + m.line.last + ')' : ''}` : 'no line']]
+    ['Line IN / OUT today', m.line && m.line.enabled ? `${m.line.in} / ${m.line.out}${m.line.last ? ' (last: ' + m.line.last + ')' : ''}` : 'no line'],
+    ['Tamper', !m.tamper || !m.tamper.enabled ? 'off' : `${m.tamper.state}${m.tamper.reason ? ' (' + m.tamper.reason + ')' : ''} · edges ${m.tamper.edge_pct}% · lost ${m.tamper.lost_pct}% · reference ${m.tamper.ref_age_s < 0 ? 'none' : m.tamper.ref_age_s + ' s old'}`]]
     .concat(m.zones.map(z => [z.name, (z.active ? 'MOTION ' : '') + z.pct + '%']));
   $('motstate').innerHTML = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
 }
@@ -656,6 +676,8 @@ function onEvent(e) {
   if (e.event === 'motion_start') toast(`Motion: ${e.zone || ''}`);
   if (e.event === 'object_detected') toast(`Detected: ${e.object}${e.zone ? ' in ' + e.zone : ''}`);
   if (e.event === 'person_detected_local') toast(`Person (on-device)${e.zone ? ' in ' + e.zone : ''}: ${e.value}%`);
+  if (e.event === 'tamper') toast(`Tamper alarm: ${e.detail || ''}`);
+  if (e.event === 'tamper_cleared') toast(`Tamper cleared: ${e.detail || ''}`);
   if (e.event === 'line_in' || e.event === 'line_out') toast(`Line crossed: ${e.event === 'line_in' ? 'IN' : 'OUT'} (${e.value} today)`);
 }
 $('evfilter').onchange = renderEvents;

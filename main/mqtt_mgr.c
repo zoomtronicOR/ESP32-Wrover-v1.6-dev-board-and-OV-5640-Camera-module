@@ -343,6 +343,15 @@ static void publish_discovery(void)
         announce("binary_sensor", object, z);
     }
 
+    // Tamper (camera covered / moved); reason in the attributes.
+    cJSON *tp = entity("tamper", "Tamper", NULL);
+    topic(t, "tamper");
+    cJSON_AddStringToObject(tp, "state_topic", t);
+    cJSON_AddStringToObject(tp, "value_template", "{{ value_json.state }}");
+    cJSON_AddStringToObject(tp, "device_class", "tamper");
+    cJSON_AddStringToObject(tp, "json_attributes_topic", t);
+    announce("binary_sensor", "tamper", tp);
+
     // On-device person detection and line crossing.
     cJSON *pl = entity("person_local", "Person (local)", NULL);
     topic(t, "person_local");
@@ -674,6 +683,11 @@ static void on_connected(void)
     esp_mqtt_client_subscribe(s_client, t, 1);
     topic(t, "motion");
     esp_mqtt_client_publish(s_client, t, motion_mgr_active() ? "ON" : "OFF", 0, s_cfg.qos, true);
+    const char *tamper = motion_mgr_tamper();
+    char tjs[64];
+    snprintf(tjs, sizeof(tjs), "{\"state\":\"%s\",\"reason\":\"%s\"}", tamper ? "ON" : "OFF", tamper ? tamper : "");
+    topic(t, "tamper");
+    esp_mqtt_client_publish(s_client, t, tjs, 0, s_cfg.qos, true);
     if (s_cfg.discovery) {
         snprintf(t, sizeof(t), "%s/status", s_cfg.disc_prefix);
         esp_mqtt_client_subscribe(s_client, t, 1);

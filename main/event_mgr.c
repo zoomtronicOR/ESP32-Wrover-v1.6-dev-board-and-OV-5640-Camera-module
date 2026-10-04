@@ -61,6 +61,8 @@ static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
     [EV_PERSON_LOCAL_LEFT] = "person_left_local",
     [EV_OTA_STARTED] = "ota_started",
     [EV_OTA_FINISHED] = "ota_finished",
+    [EV_TAMPER] = "tamper",
+    [EV_TAMPER_CLEARED] = "tamper_cleared",
 };
 
 static QueueHandle_t s_queue;

@@ -28,6 +28,8 @@ typedef enum {
     EV_PERSON_LOCAL_LEFT,
     EV_OTA_STARTED,
     EV_OTA_FINISHED,     // value 1 = ok, 2 = rollback, 0 = failed (detail = reason)
+    EV_TAMPER,           // detail = covered / moved, value = edge or mismatch %
+    EV_TAMPER_CLEARED,   // detail = restored / new view accepted
     EV_TYPE_COUNT
 } event_type_t;
 
