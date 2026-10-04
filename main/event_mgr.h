@@ -50,8 +50,10 @@ void event_clear(void);
 uint32_t event_count_today(event_type_t type);
 
 #define EVENT_DESC_LEN 384
-// Called from the dispatcher after an event has been stored (used by the LLM describer).
-typedef void (*event_listener_t)(uint32_t id, event_type_t type, bool has_snapshot);
-void event_set_listener(event_listener_t cb);
+// Called from the dispatcher after an event has been stored (LLM describer, statistics).
+// detail is the event's detail text (object label for EV_OBJECT_*), never NULL.
+typedef void (*event_listener_t)(uint32_t id, event_type_t type, const char *detail, bool has_snapshot);
+#define EVENT_LISTENERS_MAX 4
+esp_err_t event_add_listener(event_listener_t cb);
 // Attaches an AI description to a stored event and re-publishes it (WebSocket + MQTT).
 esp_err_t event_set_description(uint32_t id, const char *text);

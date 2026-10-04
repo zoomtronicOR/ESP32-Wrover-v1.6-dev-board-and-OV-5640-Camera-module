@@ -14,6 +14,7 @@
 #include "person_mgr.h"
 #include "mqtt_mgr.h"
 #include "status_led.h"
+#include "stats_mgr.h"
 #include "sysmon.h"
 #include "web_server.h"
 #include "wifi_mgr.h"
@@ -45,6 +46,7 @@ void app_main(void)
     person_mgr_init();
     ai_mgr_init();
     llm_mgr_init();
+    stats_mgr_init();
     web_server_start();
     console_cmds_start();
 

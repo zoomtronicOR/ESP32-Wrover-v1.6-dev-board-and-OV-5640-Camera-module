@@ -86,6 +86,8 @@ Zaštita je uključena od prvog pokretanja. Dok je inicijalna lozinka aktivna, w
 | GET | `/api/events` | Dnevnik događaja (`?limit=N`) |
 | GET | `/api/events/snapshot?id=N` | Snapshot događaja |
 | POST | `/api/events/clear` | Briše događaje |
+| GET | `/api/stats` | Statistika po satu za poslednja 24 h |
+| POST | `/api/stats/reset` | Briše statistiku |
 | WS | `/ws` | Status svake sekunde i događaji u realnom vremenu |
 
 ## Sigurnost
@@ -135,6 +137,8 @@ Tab **Motion**: zone se crtaju prevlačenjem preko slike. Heatmap prikazuje šta
 
 Nagla promena većine slike, npr. kad se upali svetlo, ne pokreće alarm. Dok je detekcija uključena, senzor ne ide u standby.
 
+Dekodiranje JPEG-a za analizu traje 200–350 ms (XGA), pa analiza ne zauzima više od oko polovine jezgra: ako traženi *Analysed FPS* ne može da se postigne, stvarni FPS se smanji (vidi se na Motion tabu kao *Analysis time*).
+
 ## Lokalna detekcija osobe (na samom ESP32)
 
 Radi bez servera i bez interneta: TensorFlow Lite Micro model „person detection“ (Apache-2.0, 96×96, ~300 KB) izvršava se na ESP32.
@@ -178,6 +182,17 @@ Kamera može da pošalje snapshot događaja (pokret ili AI objekat) vision model
 - **Open WebUI / OpenAI API:** URL `http://<host>:3000/api/chat/completions` (ili Ollama `/v1/chat/completions`) i API ključ.
 
 Šalje se samo jedna slika po događaju, uz cooldown, pa i spori CPU modeli rade.
+
+## Statistika
+
+Tab **Stats** prikazuje poslednja 24 sata, po satu:
+- **Zbirovi:** događaji pokreta, osobe (lokalno), AI objekti, prelasci linije IN/OUT, tamper alarmi.
+- **Brojanje objekata** (spec §35): koliko ih je sada, danas i u poslednja 24 h, po klasi.
+- **Detekcije po satu:** stubičasti grafikoni (AI objekti naslagani po klasi, prve četiri klase posebno, ostale kao „other“).
+- **Zdravlje po satu:** FPS kamere, AI FPS, Wi-Fi RSSI, opterećenje CPU-a, najmanje slobodnog heap-a i PSRAM-a (uzorak na 10 s).
+- Prelaz mišem preko grafikona prikazuje vrednosti sata; *Show table* daje iste podatke kao tabelu.
+
+Statistika se čuva samo u RAM-u, jer brisanje flash-a dok kamera radi zaglavi ovu ploču. Posle restarta počinje od nule. Dok sat nije podešen, sati se broje od uključenja, a kad se vreme dobije (NTP ili browser), podaci se prebacuju na prave sate.
 
 ## Kamera, grejanje i standby
 
@@ -296,10 +311,10 @@ platformio.ini        PlatformIO projekat (COM port, ploča)
 - [x] **AI opis događaja** preko vision LLM-a (Ollama / Open WebUI)
 - [x] **Faza 8, sigurnost:** prijava, API token, HTTP Basic, zaključavanje, zaštićeni OTA sa rollback-om
 - [x] **Tamper alarm:** kamera prekrivena, zaslepljena ili pomerena (događaji, MQTT, HA senzor)
+- [x] **Statistika:** po satu za 24 h (pokreti, osobe, objekti, IN/OUT, tamper, FPS, RSSI, CPU, memorija), Stats tab sa grafikonima
 - [x] **Resursi:** trake iskorišćenosti (CPU, RAM, PSRAM, DMA, particija, NVS, stream slotovi, Wi-Fi) na System tabu
 
 **Sledeće:**
-- [ ] Statistika po satu za 24 h (pokreti, osobe, objekti, IN/OUT, FPS, RSSI, memorija) i Stats tab sa grafikonima
 - [ ] Faza 6: microSD preko SPI-ja (podrazumevano isključen), timelapse
 
 ## Licence

@@ -617,6 +617,11 @@ const char *ai_mgr_state(void)
     return s_state;
 }
 
+float ai_mgr_fps(void)
+{
+    return s_fps;
+}
+
 const char *ai_mgr_last_object(void)
 {
     return s_last_object;

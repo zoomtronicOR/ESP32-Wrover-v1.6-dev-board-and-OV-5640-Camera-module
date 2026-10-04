@@ -17,6 +17,7 @@
 #include "event_mgr.h"
 #include "llm_mgr.h"
 #include "motion_mgr.h"
+#include "stats_mgr.h"
 #include "person_mgr.h"
 #include "mqtt_mgr.h"
 #include "freertos/FreeRTOS.h"
@@ -682,6 +683,17 @@ static esp_err_t motion_post(httpd_req_t *req)
     return send_result(req, e, err[0] ? err : NULL);
 }
 
+static esp_err_t stats_get(httpd_req_t *req)
+{
+    return send_json(req, stats_mgr_json(), NULL);
+}
+
+static esp_err_t stats_reset_post(httpd_req_t *req)
+{
+    stats_mgr_reset();
+    return send_result(req, ESP_OK, NULL);
+}
+
 static esp_err_t motion_debug_get(httpd_req_t *req)
 {
     return send_json(req, motion_mgr_debug_json(), NULL);
@@ -1020,6 +1032,8 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/motion", HTTP_GET, motion_get);
     reg(s_api, "/api/motion", HTTP_POST, motion_post);
     reg(s_api, "/api/motion/debug", HTTP_GET, motion_debug_get);
+    reg(s_api, "/api/stats", HTTP_GET, stats_get);
+    reg(s_api, "/api/stats/reset", HTTP_POST, stats_reset_post);
     reg(s_api, "/api/ai", HTTP_GET, ai_get);
     reg(s_api, "/api/ai", HTTP_POST, ai_post);
     reg(s_api, "/api/ai/test", HTTP_POST, ai_test_post);

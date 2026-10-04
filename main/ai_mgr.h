@@ -25,6 +25,8 @@ esp_err_t ai_mgr_set_enabled(bool enabled);
 
 // Tracked label i for Home Assistant discovery; false when slot i is unused.
 bool ai_mgr_label(int i, char *label, size_t len);
+// Smoothed inference rate (0 while idle or off).
+float ai_mgr_fps(void);
 // Name of the most recently detected object ("" if none yet).
 const char *ai_mgr_last_object(void);
 // Runs one inference right now and returns {objects, w, h, ms, image(base64 JPEG)} or {error}.

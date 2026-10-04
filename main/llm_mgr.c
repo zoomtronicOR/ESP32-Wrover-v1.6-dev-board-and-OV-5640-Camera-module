@@ -375,7 +375,7 @@ done:
 
 /* ------------------------------------------------------------------ worker ---------------- */
 
-static void on_event(uint32_t id, event_type_t type, bool has_snapshot)
+static void on_event(uint32_t id, event_type_t type, const char *detail, bool has_snapshot)
 {
     llm_cfg_t c = s_cfg;  // read-only snapshot; fields are small scalars
     if (!c.enabled || !has_snapshot) {
@@ -475,7 +475,7 @@ esp_err_t llm_mgr_init(void)
     s_queue = xQueueCreate(1, sizeof(job_t));
     load_config();
     s_state = s_cfg.enabled ? "idle" : "off";
-    event_set_listener(on_event);
+    event_add_listener(on_event);
     xTaskCreatePinnedToCore(llm_task, "llm", 6144, NULL, 2, NULL, 1);
     ESP_LOGI(TAG, "AI descriptions %s (%s)", s_cfg.enabled ? "enabled" : "disabled", s_cfg.model[0] ? s_cfg.model : "no model");
     return ESP_OK;

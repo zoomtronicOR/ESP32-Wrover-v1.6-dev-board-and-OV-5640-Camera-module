@@ -30,11 +30,12 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Sastoji se od mo
 | `auth_mgr.c` | Lozinka (PBKDF2-SHA256 + salt), sesije (HttpOnly cookie), API token, HTTP Basic, zaključavanje posle pogrešnih pokušaja, inicijalni podaci `admin` / `espadmin` |
 | `wifi_mgr.c` | STA sa ponovnim povezivanjem, setup AP kao rezerva, mDNS, SNTP (Europe/Belgrade), vreme iz browsera kao rezerva |
 | `mqtt_mgr.c` | MQTT klijent i HA discovery; sve operacije nad klijentom rade u jednom worker task-u, ostali moduli samo šalju komande u red |
-| `event_mgr.c` | Centralni event engine: neblokirajući red, 64 događaja u PSRAM-u, snapshot-i za poslednjih 12, slanje na MQTT, WebSocket i log, listener za LLM opise |
-| `motion_mgr.c` | Detekcija pokreta: JPEG se dekodira u razmeri 1:8 u mrežu 96×72, poređenje sa prilagodljivom pozadinom, kompenzacija osvetljenja, do 4 zone, prelazak linije (težište promena, histereza), tamper (mapa ivica naspram reference: prekrivena / pomerena) |
+| `event_mgr.c` | Centralni event engine: neblokirajući red, 64 događaja u PSRAM-u, snapshot-i za poslednjih 12, slanje na MQTT, WebSocket i log, do 4 listenera (LLM opisi, statistika) |
+| `motion_mgr.c` | Detekcija pokreta: JPEG se dekodira u razmeri 1:8 u mrežu 96×72, poređenje sa prilagodljivom pozadinom, kompenzacija osvetljenja, do 4 zone, prelazak linije (težište promena, histereza), tamper (mapa ivica naspram reference: prekrivena / pomerena). Analiza odmara bar onoliko koliko je radila, pa ne zauzima više od ~polovine core 1; sam tamper radi na 1 fps |
 | `person_mgr.cc` | Lokalna detekcija osobe: TFLite Micro model 96×96, isečak oko pokreta, potvrda i timeout |
 | `ai_mgr.c` | Eksterni AI: POST JPEG-a na server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom |
 | `llm_mgr.c` | Opis događaja vision LLM-om (Ollama `/api/chat` ili OpenAI-kompatibilni API), cooldown, bez gomilanja zahteva |
+| `stats_mgr.c` | Statistika: 24 satna bucket-a u RAM-u, brojači iz događaja i uzorci zdravlja na 10 s; sati po uptime-u dok se ne podesi sat |
 | `sysmon.c` | Opterećenje CPU-a po jezgru, heap/PSRAM/DMA (ukupno, slobodno, minimum), veličina firmware-a, lista taskova, telemetrija modula |
 | `status_led.c` | Statusni LED (GPIO 2) |
 | `console_cmds.c` | Serijska konzola (UART, 115200) |

@@ -105,8 +105,26 @@ def events():
     return out
 
 
+def stats():
+    import math, random
+    rnd = random.Random(7)
+    now_h = int(time.time() // 3600)
+    hours = []
+    for k in range(now_h - 23, now_h + 1):
+        hod = time.localtime(k * 3600).tm_hour
+        day = 1.0 if 7 <= hod <= 21 else 0.15
+        act = lambda m: int(rnd.random() * m * day + 0.3)
+        hours.append({'start': k * 3600, 'label': f'{hod:02d}:00', 'motion': act(9), 'person': act(5), 'line_in': act(4),
+                      'line_out': act(4), 'tamper': 1 if k == now_h - 3 else 0, 'objects': [act(5), act(3), act(2), act(1)],
+                      'samples': 360, 'fps': round(12.4 - 2.5 * day * rnd.random(), 1), 'ai_fps': round(0.9 * day * rnd.random(), 2),
+                      'cpu': round(30 + 25 * day + 5 * rnd.random()), 'rssi': -33 - rnd.randint(0, 6),
+                      'heap_min': 68000 + rnd.randint(0, 9000), 'psram_min': 1180000 + rnd.randint(0, 90000)})
+    return {'clock': 'wall', 'sample_s': 10, 'labels': ['person', 'car', 'dog', 'cat'], 'hours': hours}
+
+
 def get_json(path):
     if path == '/api/status': return status()
+    if path == '/api/stats': return stats()
     if path == '/api/session': return {'auth_enabled': True, 'authorized': not SHOW_LOGIN}
     if path == '/api/telemetry': return telemetry()
     if path == '/api/events': return events()

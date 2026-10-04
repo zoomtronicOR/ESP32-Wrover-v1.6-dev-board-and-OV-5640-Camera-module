@@ -68,7 +68,8 @@ static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
 static QueueHandle_t s_queue;
 static SemaphoreHandle_t s_lock;
 static record_t *s_ring;  // EVENTS_MAX records in PSRAM
-static event_listener_t s_listener;
+static event_listener_t s_listeners[EVENT_LISTENERS_MAX];
+static int s_nlisteners;
 static int s_head;  // next slot to write
 static uint32_t s_next_id = 1;
 static uint32_t s_today[EV_TYPE_COUNT];
@@ -203,8 +204,8 @@ static void dispatch_task(void *arg)
         cJSON_AddStringToObject(j, "type", "event");
         web_ws_broadcast_json(j);
         cJSON_Delete(j);
-        if (s_listener) {
-            s_listener(r->id, p.type, jpg != NULL);
+        for (int i = 0; i < s_nlisteners; i++) {
+            s_listeners[i](r->id, p.type, p.detail, jpg != NULL);
         }
     }
 }
@@ -280,9 +281,14 @@ void event_clear(void)
     xSemaphoreGive(s_lock);
 }
 
-void event_set_listener(event_listener_t cb)
+// Listeners are registered once at start-up, before events that matter flow.
+esp_err_t event_add_listener(event_listener_t cb)
 {
-    s_listener = cb;
+    if (s_nlisteners >= EVENT_LISTENERS_MAX) {
+        return ESP_ERR_NO_MEM;
+    }
+    s_listeners[s_nlisteners++] = cb;
+    return ESP_OK;
 }
 
 esp_err_t event_set_description(uint32_t id, const char *text)

@@ -40,6 +40,8 @@ static const char *TAG = "motion";
 #define TAMPER_REFRESH_US  (60 * 1000000LL)   // reference refresh interval
 #define TAMPER_MIN_ENERGY  1.5f   // mean gradient below this = featureless view (dark): no checks
 #define TAMPER_MIN_EDGES   40     // edge cells a usable reference needs
+#define TAMPER_FPS         1      // analysis rate when only tamper detection runs
+#define ANALYSE_REST       1      // rest at least this many times the work time (caps core 1 load)
 #define TAMPER_DARK_LUMA   16     // mean luma below this: "covered" is reported as "dark"
 
 typedef struct {
@@ -102,7 +104,8 @@ static uint32_t s_line_in, s_line_out;
 static int s_line_yday = -1;
 static bool s_line_last_in;
 static uint32_t s_analysed, s_scene_changes;
-static float s_analyse_ms;
+static float s_analyse_ms, s_analyse_fps;
+static int64_t s_last_us;
 
 typedef enum { TS_OFF, TS_LEARNING, TS_OK, TS_SUSPECT, TS_ALARM } tamper_state_t;
 static const char *const TS_NAMES[] = {"off", "learning", "ok", "suspect", "alarm"};
@@ -803,14 +806,16 @@ static void motion_task(void *arg)
             // Motion / tamper need a continuous frame flow, which keeps the sensor out of standby.
             cam_mgr_consumer_add();
             consumer = true;
+            s_last_us = 0;
+            s_analyse_fps = 0;
             s_bg_valid = false;
         }
 
-        int64_t t0 = esp_timer_get_time();
         cam_frame_t *f = cam_mgr_frame_wait(seq, pdMS_TO_TICKS(2000));
         if (!f) {
             continue;
         }
+        int64_t t0 = esp_timer_get_time();
         seq = f->seq;
         if (build_grid(f)) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -825,10 +830,20 @@ static void motion_task(void *arg)
         }
         cam_mgr_frame_release(f);
 
-        int64_t spent = esp_timer_get_time() - t0;
+        int64_t now = esp_timer_get_time(), spent = now - t0;
         s_analyse_ms = s_analyse_ms * 0.9f + (spent / 1000.0f) * 0.1f;
-        int64_t period = 1000000 / c.fps;
-        vTaskDelay(spent < period ? pdMS_TO_TICKS((period - spent) / 1000) : 1);
+        if (s_last_us) {
+            float inst = 1e6f / (now - s_last_us);
+            s_analyse_fps = s_analyse_fps ? s_analyse_fps * 0.9f + inst * 0.1f : inst;
+        }
+        s_last_us = now;
+        // Tamper alone only needs 1 fps (conditions must hold 10 s). The JPEG decode costs
+        // ~350 ms at XGA, so the task also rests at least as long as it worked: analysis
+        // never takes more than ~half of core 1, and the rate drops instead (spec §40).
+        int64_t period = 1000000 / (c.enabled ? c.fps : TAMPER_FPS);
+        int64_t rest = period - spent;
+        rest = rest < spent * ANALYSE_REST ? spent * ANALYSE_REST : rest;
+        vTaskDelay(pdMS_TO_TICKS(rest / 1000) + 1);
     }
 }
 
@@ -875,6 +890,7 @@ cJSON *motion_mgr_state_json(void)
     cJSON_AddNumberToObject(o, "analysed", s_analysed);
     cJSON_AddNumberToObject(o, "scene_changes", s_scene_changes);
     cJSON_AddNumberToObject(o, "analyse_ms", (int)s_analyse_ms);
+    cJSON_AddNumberToObject(o, "analyse_fps", (int)(s_analyse_fps * 10) / 10.0);
     cJSON_AddNumberToObject(o, "events_today", event_count_today(EV_MOTION_START));
     cJSON *ls = cJSON_AddObjectToObject(o, "line");
     cJSON_AddBoolToObject(ls, "enabled", s_cfg.line.enabled);

@@ -24,6 +24,17 @@ section{display:none}section.active{display:block}
 .card h2{font-size:14px;margin:0 0 10px;font-weight:600}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .metric{background:var(--bg);border-radius:6px;padding:8px 10px}
+/* stats charts */
+:root{--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#9ca3af}
+@media (prefers-color-scheme:dark){:root{--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#6b7280}}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:6px 22px}
+.chart{position:relative;min-width:0}.chart h3{font-size:13px;font-weight:600;margin:8px 0 2px}.chart svg{display:block;width:100%;overflow:visible}
+.chart .ax{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.chart .grid{stroke:var(--line);stroke-width:1}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted);margin:2px 0 4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+#sttip{position:fixed;pointer-events:none;z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.18);display:none;white-space:nowrap}
+#sttip b{display:block;margin-bottom:2px}#sttip i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+#stobjects th.num{text-align:right}.sttable{overflow-x:auto}.sttable td,.sttable th{white-space:nowrap;text-align:right}.sttable td:first-child,.sttable th:first-child{text-align:left}
 .ind{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:13px}.ind span{display:inline-flex;align-items:center;gap:6px}.ind .dot{width:11px;height:11px}
 .metric .k{font-size:12px;color:var(--muted)}.metric .v{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
 .cols{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:14px}
@@ -96,6 +107,7 @@ progress{width:100%;height:14px}
   <button data-tab="motion">Motion</button>
   <button data-tab="ai">AI</button>
   <button data-tab="events">Events</button>
+  <button data-tab="stats">Stats</button>
   <button data-tab="mqtt">MQTT / HA</button>
   <button data-tab="network">Network</button>
   <button data-tab="system">System</button>
@@ -248,6 +260,20 @@ progress{width:100%;height:14px}
   </div>
 </section>
 
+<section id="stats">
+  <div class="card">
+    <div class="toolbar" style="margin:0 0 10px"><h2 style="margin:0">Last 24 hours</h2><span class="muted" id="stclock"></span><span style="flex:1"></span>
+      <button class="b sec" id="sttable">Show table</button><button class="b sec" id="streset">Reset</button></div>
+    <div class="tiles" id="sttiles"></div>
+  </div>
+  <div class="card"><h2>Object counting</h2><table id="stobjects"></table></div>
+  <div class="card"><h2>Detections per hour</h2><div class="charts" id="stdet"></div></div>
+  <div class="card"><h2>Health per hour</h2><div class="charts" id="sthealth"></div>
+    <p class="muted" style="margin:8px 0 0">Hourly averages of 10 s samples; heap and PSRAM show the lowest free value of the hour. Kept in RAM, so a reboot starts from zero.</p></div>
+  <div class="card sttable" id="sttablecard" style="display:none"><table id="sttab"></table></div>
+  <div id="sttip"></div>
+</section>
+
 <section id="events">
   <div class="card">
     <div class="toolbar" style="margin:0 0 6px">
@@ -393,6 +419,8 @@ function showTab(id) {
   clearInterval(heatTimer);
   if (id === 'motion') loadMotion();
   if (id === 'events') loadEvents();
+  clearInterval(statsTimer);
+  if (id === 'stats') { loadStats(); statsTimer = setInterval(loadStats, 30000); }
   if (id === 'ai') { loadAi(); loadLlm(); loadPerson(); }
   clearInterval(telTimer);
   if (id === 'system') { loadSecurity(); loadOta(); loadSystem(); loadTelemetry(); telTimer = setInterval(loadTelemetry, 2000); }
@@ -655,13 +683,118 @@ $('zsave').onclick = async () => {
 };
 function renderMotState() {
   const m = status && status.motion; if (!m) return;
-  const rows = [['State', !m.enabled ? 'disabled' : m.active ? 'MOTION' : 'idle'], ['Changed area', m.changed_pct + '%'], ['Analysis time', m.analyse_ms + ' ms'],
+  const rows = [['State', !m.enabled ? 'disabled' : m.active ? 'MOTION' : 'idle'], ['Changed area', m.changed_pct + '%'], ['Analysis time', m.analyse_ms + ' ms · ' + (m.analyse_fps || 0) + ' fps'],
     ['Frames analysed', m.analysed], ['Lighting changes ignored', m.scene_changes], ['Events today', m.events_today],
     ['Line IN / OUT today', m.line && m.line.enabled ? `${m.line.in} / ${m.line.out}${m.line.last ? ' (last: ' + m.line.last + ')' : ''}` : 'no line'],
     ['Tamper', !m.tamper || !m.tamper.enabled ? 'off' : `${m.tamper.state}${m.tamper.reason ? ' (' + m.tamper.reason + ')' : ''} · edges ${m.tamper.edge_pct}% · lost ${m.tamper.lost_pct}% · reference ${m.tamper.ref_age_s < 0 ? 'none' : m.tamper.ref_age_s + ' s old'}`]]
     .concat(m.zones.map(z => [z.name, (z.active ? 'MOTION ' : '') + z.pct + '%']));
   $('motstate').innerHTML = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
 }
+
+/* ---------- stats ---------- */
+let stats = null, statsTimer = null, statsTable = false;
+const SC = ['var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)'], SOTHER = 'var(--s5)';
+async function loadStats() { try { stats = await api('/api/stats'); renderStats(); } catch (e) { toast(e.message); } }
+const sum = (a, f) => a.reduce((t, h) => t + (f(h) || 0), 0);
+const niceMax = v => { if (v <= 0) return 1; const e = 10 ** Math.floor(Math.log10(v)), m = v / e; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * e; };
+// AI labels beyond four fold into "other" so hues are never cycled.
+function objSeries(st) {
+  const L = st.labels, ser = L.slice(0, 4).map((l, i) => ({ name: l, color: SC[i], get: h => h.objects[i] || 0 }));
+  if (L.length > 4) ser.push({ name: 'other', color: SOTHER, get: h => h.objects.slice(4).reduce((a, b) => a + b, 0) });
+  return ser;
+}
+function renderStats() {
+  const st = stats, H = st.hours;
+  $('stclock').textContent = st.clock === 'wall' ? '' : '(clock not set: hours relative to now)';
+  const lin = sum(H, h => h.line_in), lout = sum(H, h => h.line_out), objs = H.reduce((t, h) => t + h.objects.reduce((a, b) => a + b, 0), 0);
+  const tiles = [['Motion events', sum(H, h => h.motion)], ['Persons (on-device)', sum(H, h => h.person)], ['AI objects', objs],
+    ['Line in / out', lin + ' / ' + lout], ['Tamper alarms', sum(H, h => h.tamper)]];
+  $('sttiles').innerHTML = tiles.map(([k, v]) => `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  // Spec §35: current / today / 24 h per tracked object.
+  const ai = status && status.ai ? status.ai.objects : [];
+  const names = [...new Set([...ai.map(o => o.label), ...st.labels])];
+  $('stobjects').innerHTML = names.length ? '<tr><th>Object</th><th class="num">Now</th><th class="num">Today</th><th class="num">Last 24 h</th></tr>' + names.map(n => {
+    const o = ai.find(x => x.label === n), i = st.labels.indexOf(n);
+    return `<tr><td>${esc(n)}</td><td class="num">${o ? o.count : '—'}</td><td class="num">${o ? o.today : '—'}</td><td class="num">${i < 0 ? 0 : sum(H, h => h.objects[i])}</td></tr>`; }).join('')
+    : '<tr><td class="muted">No AI objects configured.</td></tr>';
+  $('stdet').innerHTML = ''; $('sthealth').innerHTML = '';
+  colChart($('stdet'), 'Motion events', H, [{ name: 'motion', color: SC[0], get: h => h.motion }]);
+  colChart($('stdet'), 'Persons (on-device)', H, [{ name: 'persons', color: SC[0], get: h => h.person }]);
+  colChart($('stdet'), 'AI objects', H, objSeries(st));
+  colChart($('stdet'), 'Line crossings', H, [{ name: 'in', color: SC[0], get: h => h.line_in }, { name: 'out', color: SC[1], get: h => h.line_out }]);
+  lineChart($('sthealth'), 'Camera FPS', H, h => h.fps, v => v.toFixed(1));
+  lineChart($('sthealth'), 'AI FPS', H, h => h.ai_fps, v => v.toFixed(2));
+  lineChart($('sthealth'), 'Wi-Fi RSSI (dBm)', H, h => h.rssi, v => Math.round(v), true);
+  lineChart($('sthealth'), 'CPU load (%)', H, h => h.cpu, v => Math.round(v));
+  lineChart($('sthealth'), 'Min free heap (KB)', H, h => h.heap_min == null ? null : h.heap_min / 1024, v => Math.round(v));
+  lineChart($('sthealth'), 'Min free PSRAM (MB)', H, h => h.psram_min == null ? null : h.psram_min / 1048576, v => v.toFixed(2));
+  renderStatsTable();
+}
+function renderStatsTable() {
+  $('sttablecard').style.display = statsTable ? '' : 'none'; $('sttable').textContent = statsTable ? 'Hide table' : 'Show table';
+  if (!statsTable || !stats) return;
+  const L = stats.labels, cell = v => v == null ? '—' : v;
+  $('sttab').innerHTML = `<tr><th>Hour</th><th>Motion</th><th>Persons</th>${L.map(l => `<th>${esc(l)}</th>`).join('')}<th>In</th><th>Out</th><th>Tamper</th><th>FPS</th><th>AI FPS</th><th>RSSI</th><th>CPU %</th><th>Heap min</th><th>PSRAM min</th></tr>` +
+    stats.hours.map(h => `<tr><td>${esc(h.label)}</td><td>${h.motion}</td><td>${h.person}</td>${L.map((l, i) => `<td>${h.objects[i] || 0}</td>`).join('')}<td>${h.line_in}</td><td>${h.line_out}</td><td>${h.tamper}</td><td>${cell(h.fps)}</td><td>${cell(h.ai_fps)}</td><td>${cell(h.rssi)}</td><td>${cell(h.cpu)}</td><td>${h.heap_min == null ? '—' : fmtBytes(h.heap_min)}</td><td>${h.psram_min == null ? '—' : fmtBytes(h.psram_min)}</td></tr>`).join('');
+}
+$('sttable').onclick = () => { statsTable = !statsTable; renderStatsTable(); };
+$('streset').onclick = async () => { if (!confirm('Clear the statistics?')) return; try { await api('/api/stats/reset', {}); loadStats(); } catch (e) { toast(e.message); } };
+// Shared chart frame: one y axis, hairline grid, x labels every 4 hours.
+function frame(host, title, ser) {
+  const div = document.createElement('div'); div.className = 'chart';
+  div.innerHTML = `<h3>${esc(title)}</h3>` + (ser && ser.length > 1 ? `<div class="legend">${ser.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')}</div>` : '');
+  host.appendChild(div);
+  const W = Math.max(240, div.clientWidth), Hh = 150, m = { l: 40, r: 6, t: 8, b: 22 };
+  return { div, W, H: Hh, m, pw: W - m.l - m.r, ph: Hh - m.t - m.b };
+}
+function axes(f, hours, lo, hi, fmt, int) {
+  let g = '';
+  const mid = (lo + hi) / 2;
+  for (const v of int && !Number.isInteger(mid) ? [lo, hi] : [lo, mid, hi]) { const y = f.m.t + f.ph - (v - lo) / (hi - lo) * f.ph;
+    g += `<line class="grid" x1="${f.m.l}" x2="${f.W - f.m.r}" y1="${y}" y2="${y}"/><text class="ax" x="${f.m.l - 6}" y="${y + 4}" text-anchor="end">${fmt(v)}</text>`; }
+  const n = hours.length, slot = f.pw / n;
+  hours.forEach((h, i) => { if (i % 4 === 3) g += `<text class="ax" x="${f.m.l + slot * (i + 0.5)}" y="${f.H - 5}" text-anchor="middle">${esc(h.label)}</text>`; });
+  return g;
+}
+function tip(e, html) { const t = $('sttip'); if (!html) { t.style.display = 'none'; return; } t.innerHTML = html; t.style.display = 'block';
+  const r = t.getBoundingClientRect(); let x = e.clientX + 14, y = e.clientY + 14; if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14; if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+  t.style.left = x + 'px'; t.style.top = y + 'px'; }
+function hoverIndex(e, f, n) { const r = e.currentTarget.getBoundingClientRect(), x = (e.clientX - r.left) * f.W / r.width - f.m.l; const i = Math.floor(x / (f.pw / n)); return i >= 0 && i < n ? i : -1; }
+// Columns: stacked series, <= 24px wide, 4px rounded top, 2px surface gap between segments.
+function colChart(host, title, hours, ser) {
+  const f = frame(host, title, ser), n = hours.length, slot = f.pw / n, bw = Math.min(24, slot * 0.62);
+  const tot = hours.map(h => ser.reduce((t, s) => t + s.get(h), 0)), hi = niceMax(Math.max(...tot));
+  let marks = '';
+  hours.forEach((h, i) => {
+    let y0 = f.m.t + f.ph; const x = f.m.l + slot * i + (slot - bw) / 2, top = ser.map(s => s.get(h)).reduce((k, v, j) => v ? j : k, -1);
+    ser.forEach((s, j) => { const v = s.get(h); if (!v) return; const gap = y0 < f.m.t + f.ph ? 2 : 0; const hgt = Math.max(1, v / hi * f.ph - gap); y0 -= gap;
+      const y = y0 - hgt, r = j === top ? Math.min(4, hgt, bw / 2) : 0;
+      marks += `<path fill="${s.color}" d="M${x},${y0}V${y + r}q0,-${r} ${r},-${r}H${x + bw - r}q${r},0 ${r},${r}V${y0}Z"/>`; y0 = y; });
+  });
+  f.div.insertAdjacentHTML('beforeend', `<svg viewBox="0 0 ${f.W} ${f.H}" height="${f.H}">${axes(f, hours, 0, hi, v => Math.round(v), true)}${marks}<rect class="hl" fill="var(--text)" opacity="0" width="${slot}" y="${f.m.t}" height="${f.ph}"/><rect fill="transparent" x="${f.m.l}" y="0" width="${f.pw}" height="${f.H}"/></svg>`);
+  const svg = f.div.querySelector('svg'), hl = svg.querySelector('.hl');
+  svg.onmousemove = e => { const i = hoverIndex(e, f, n); if (i < 0) return tip(e); hl.setAttribute('x', f.m.l + slot * i); hl.setAttribute('opacity', 0.06);
+    tip(e, `<b>${esc(hours[i].label)}</b>` + ser.map(s => `<div>${ser.length > 1 ? `<i style="background:${s.color}"></i>${esc(s.name)}: ` : ''}${s.get(hours[i])}</div>`).join('')); };
+  svg.onmouseleave = e => { hl.setAttribute('opacity', 0); tip(e); };
+}
+// Single-series line: 2px, gaps where an hour has no samples, last point marked.
+function lineChart(host, title, hours, get, fmt, neg) {
+  const f = frame(host, title), n = hours.length, slot = f.pw / n, vals = hours.map(get), have = vals.filter(v => v != null);
+  let lo = 0, hi = niceMax(Math.max(0, ...have));
+  if (neg) { lo = Math.floor(Math.min(-90, ...have) / 10) * 10; hi = Math.ceil(Math.max(-30, ...have) / 10) * 10; }
+  const X = i => f.m.l + slot * (i + 0.5), Y = v => f.m.t + f.ph - (v - lo) / (hi - lo) * f.ph;
+  let d = '', pen = false, last = -1;
+  vals.forEach((v, i) => { if (v == null) { pen = false; return; } d += (pen ? 'L' : 'M') + X(i).toFixed(1) + ',' + Y(v).toFixed(1); pen = true; last = i; });
+  const dot = last >= 0 ? `<circle cx="${X(last)}" cy="${Y(vals[last])}" r="4" fill="var(--s1)" stroke="var(--panel)" stroke-width="2"/>` : '';
+  const empty = have.length ? '' : `<text class="ax" x="${f.m.l + f.pw / 2}" y="${f.m.t + f.ph / 2}" text-anchor="middle">no samples yet</text>`;
+  f.div.insertAdjacentHTML('beforeend', `<svg viewBox="0 0 ${f.W} ${f.H}" height="${f.H}">${axes(f, hours, lo, hi, fmt)}<path d="${d}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${dot}${empty}<line class="xh" stroke="var(--muted)" stroke-width="1" y1="${f.m.t}" y2="${f.m.t + f.ph}" opacity="0"/><circle class="hd" r="4" fill="var(--s1)" stroke="var(--panel)" stroke-width="2" opacity="0"/><rect fill="transparent" x="${f.m.l}" y="0" width="${f.pw}" height="${f.H}"/></svg>`);
+  const svg = f.div.querySelector('svg'), xh = svg.querySelector('.xh'), hd = svg.querySelector('.hd');
+  svg.onmousemove = e => { const i = hoverIndex(e, f, n); if (i < 0) return tip(e); xh.setAttribute('x1', X(i)); xh.setAttribute('x2', X(i)); xh.setAttribute('opacity', 0.5);
+    const v = vals[i]; if (v != null) { hd.setAttribute('cx', X(i)); hd.setAttribute('cy', Y(v)); hd.setAttribute('opacity', 1); } else hd.setAttribute('opacity', 0);
+    tip(e, `<b>${esc(hours[i].label)}</b>${v == null ? 'no samples' : fmt(v)}`); };
+  svg.onmouseleave = e => { xh.setAttribute('opacity', 0); hd.setAttribute('opacity', 0); tip(e); };
+}
+addEventListener('resize', () => { if (stats && document.querySelector('#stats.active')) renderStats(); });
 
 /* ---------- events ---------- */
 let events = [];
