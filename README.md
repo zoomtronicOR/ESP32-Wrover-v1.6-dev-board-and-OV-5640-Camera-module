@@ -1,6 +1,6 @@
 # ESP32-WROVER-DEV v1.6 + OV5640: kamera za Home Assistant
 
-ESP-IDF firmware koji od ESP32-WROVER ploče i OV5640 (5 MP) senzora pravi samostalnu Wi-Fi IP kameru bez cloud-a. Ima web interfejs, REST API, MJPEG stream i WebSocket telemetriju. MQTT/Home Assistant integracija, motion i AI detekcija dolaze u sledećim fazama.
+ESP-IDF firmware koji od ESP32-WROVER ploče i OV5640 (5 MP) senzora pravi samostalnu Wi-Fi IP kameru bez cloud-a. Ima web interfejs, REST API, MJPEG stream, WebSocket telemetriju i MQTT/Home Assistant integraciju. Detektuje pokret, sabotažu kamere (prekrivena ili pomerena) i osobe na samom ESP32, broji prelaske linije, a preko eksternog servera prepoznaje objekte i opisuje događaje vision LLM-om.
 
 Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](docs/ARHITEKTURA.md)**.
 
@@ -10,10 +10,10 @@ Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](do
 
 | | |
 |---|---|
-| ![Dashboard](docs/screenshots/01-dashboard.jpg) **Dashboard**: pregled, FPS, Wi-Fi, memorija, CPU | ![Live View](docs/screenshots/02-live-view.jpg) **Live View**: MJPEG stream, zone pokreta, AI okviri, overlay |
+| ![Dashboard](docs/screenshots/01-dashboard.jpg) **Dashboard**: pregled sa indikatorima (tamper, pokret, osoba, AI), FPS, Wi-Fi, memorija, CPU, stanje modula | ![Live View](docs/screenshots/02-live-view.jpg) **Live View**: MJPEG stream, zone pokreta, AI okviri, overlay |
 | ![Camera](docs/screenshots/03-camera.jpg) **Camera**: sva podešavanja OV5640 senzora | ![Motion](docs/screenshots/04-motion.jpg) **Motion**: crtanje zona, heatmap razlika, stanje |
 | ![AI](docs/screenshots/05-ai.jpg) **AI**: eksterni AI server, praćenje objekata, test detekcije | ![Events](docs/screenshots/06-events.jpg) **Events**: događaji sa snapshot-ima i AI opisima |
-| ![MQTT / HA](docs/screenshots/07-mqtt-ha.jpg) **MQTT / HA**: broker i Home Assistant discovery | ![System](docs/screenshots/08-system.jpg) **System**: sigurnost, API token, OTA, telemetrija |
+| ![MQTT / HA](docs/screenshots/07-mqtt-ha.jpg) **MQTT / HA**: broker i Home Assistant discovery | ![System](docs/screenshots/08-system.jpg) **System**: sigurnost, API token, OTA, iskorišćenost resursa, telemetrija |
 | ![Login](docs/screenshots/09-login.jpg) **Prijava** | |
 
 ## Hardver
@@ -110,7 +110,7 @@ Podešava se na tabu **MQTT / HA**. Topici imaju oblik `camera/<device>/…`, gd
 | `availability` | `online` / `offline` (retained, Last Will) |
 | `telemetry` | JSON: rssi, fps, heap, psram, uptime, cpu, camera_ok, URL-ovi (retained, period podesiv) |
 | `snapshot` | JPEG slika za HA MQTT camera entitet (retained) |
-| `event` | JSON događaji (motion/AI u sledećim fazama) |
+| `event` | JSON događaji (pokret, tamper, osoba, AI objekti, linija, OTA…) |
 | `command` | `snapshot`, `reboot`, `restart_camera` |
 | `motion`, `motion/zoneN` | `ON` / `OFF` (retained) |
 | `motion/set` | `ON` / `OFF`: uključuje ili isključuje detekciju pokreta |
@@ -118,6 +118,7 @@ Podešava se na tabu **MQTT / HA**. Topici imaju oblik `camera/<device>/…`, gd
 | `person_local` | JSON lokalne detekcije osobe `{"detected","confidence","zone","timestamp"}` (retained) |
 | `person_local/set` | `ON` / `OFF`: uključuje ili isključuje lokalnu detekciju osobe |
 | `line` | JSON brojača prelaska linije `{"in","out","last"}` (retained) |
+| `tamper` | JSON `{"state":"ON"/"OFF","reason":"covered"/"dark"/"moved"}` (retained) |
 | `description` | JSON poslednjeg događaja sa AI opisom (retained) |
 | `ai/set` | `ON` / `OFF`: uključuje ili isključuje AI; komande `ai_on` / `ai_off` na `command` |
 | `camera/set` | JSON podešavanja kamere, npr. `{"vflip":1,"quality":10}` |
@@ -151,6 +152,16 @@ Na Motion tabu: **Draw line**, pa prevuci liniju preko prolaza. Strelica pokazuj
 - Linija i brojači se vide i na Live View-u.
 - Radi dok je detekcija pokreta uključena. Najpouzdanije je kad kroz prolaz ide jedna osoba odjednom.
 
+## Sabotaža kamere (tamper)
+
+Uključuje se na Motion tabu (*Tamper detection*, podrazumevano isključeno). Radi i kad je detekcija pokreta isključena.
+- Kamera pamti mapu ivica scene kao referencu i osvežava je dok je scena mirna (bez pokreta i bez sumnje najmanje 30 s).
+- **Prekrivena** (`covered`): energija ivica padne ispod 25 % reference, ili nestane većina ivica uz pad energije ispod 50 %. Ako je slika i tamna, razlog je `dark`.
+- **Pomerena** (`moved`): nestane više od 60 % referentnih ivica, a energija ostane.
+- Alarm (`tamper`, sa snapshot-om) stiže kad stanje traje 10 s. Prestaje (`tamper_cleared`) 3 s posle povratka slike, a posle 5 min alarma kamera prihvata novi pogled kao referencu.
+- **HA:** binary senzor „Tamper“ (device_class `tamper`), razlog je u atributima.
+- Gašenje svetla u prostoriji se takođe vidi kao `dark`.
+
 ## AI detekcija objekata
 
 Klasični ESP32 je preslab za ozbiljnu lokalnu detekciju objekata (spec §42). Zato kamera šalje frame-ove na AI server u mreži, a server vraća detektovane objekte.
@@ -172,7 +183,7 @@ Kamera može da pošalje snapshot događaja (pokret ili AI objekat) vision model
 
 - OV5640 se primetno greje kad neprekidno snima. Hladnjak na modulu je preporučen.
 - Kad niko ne gleda stream ni ne traži slike, senzor posle 10 s prelazi u **standby** (softverski power-down). Pri sledećem zahtevu se budi za ~0,5 s. Ovo se isključuje opcijom *Sensor standby when idle* na Camera tabu.
-- **Detekcija pokreta drži senzor stalno budnim**, jer joj trebaju frame-ovi. Isto važi za lokalnu detekciju osobe i prelazak linije, koji rade na osnovu pokreta.
+- **Detekcija pokreta i sabotaže drže senzor stalno budnim**, jer im trebaju frame-ovi. Isto važi za lokalnu detekciju osobe i prelazak linije, koji rade na osnovu pokreta.
 - Podrazumevani *Gain ceiling* za OV5640 je 200 (~12,5x). Veća vrednost daje svetliju sliku pri slabom svetlu, ali i više šuma.
 
 ## Serijska konzola
@@ -283,9 +294,10 @@ platformio.ini        PlatformIO projekat (COM port, ploča)
 - [x] **Faza 7, eksterni AI:** generički ili DeepStack/CodeProject.AI server, praćenje objekata, okviri na Live View-u
 - [x] **AI opis događaja** preko vision LLM-a (Ollama / Open WebUI)
 - [x] **Faza 8, sigurnost:** prijava, API token, HTTP Basic, zaključavanje, zaštićeni OTA sa rollback-om
+- [x] **Tamper alarm:** kamera prekrivena, zaslepljena ili pomerena (događaji, MQTT, HA senzor)
+- [x] **Resursi:** trake iskorišćenosti (CPU, RAM, PSRAM, DMA, particija, NVS, stream slotovi, Wi-Fi) na System tabu
 
 **Sledeće:**
-- [ ] Tamper alarm: kamera prekrivena ili pomerena (HA senzor)
 - [ ] Statistika po satu za 24 h (pokreti, osobe, objekti, IN/OUT, FPS, RSSI, memorija) i Stats tab sa grafikonima
 - [ ] Faza 6: microSD preko SPI-ja (podrazumevano isključen), timelapse
 

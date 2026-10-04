@@ -9,7 +9,7 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Sastoji se od mo
      ▼              ▼              ▼              ▼              ▼              ▼
  MJPEG stream   snapshot      motion_mgr     person_mgr      ai_mgr        mqtt snapshot
  (web :81)      (/capture)    zone, linija   TFLite Micro    eksterni AI
-                              tamper*        (na ESP32)      (HTTP server)
+                              tamper         (na ESP32)      (HTTP server)
                                    │              │              │
                                    └──────────────┴──────┬───────┘
                                                          ▼
@@ -20,7 +20,6 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Sastoji se od mo
                               mqtt_mgr               WebSocket              Events tab
                          (HA discovery, stanja)     (web UI live)          (+ snapshot-i)
 ```
-`*` planirano
 
 ## Moduli
 
@@ -32,11 +31,11 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Sastoji se od mo
 | `wifi_mgr.c` | STA sa ponovnim povezivanjem, setup AP kao rezerva, mDNS, SNTP (Europe/Belgrade), vreme iz browsera kao rezerva |
 | `mqtt_mgr.c` | MQTT klijent i HA discovery; sve operacije nad klijentom rade u jednom worker task-u, ostali moduli samo šalju komande u red |
 | `event_mgr.c` | Centralni event engine: neblokirajući red, 64 događaja u PSRAM-u, snapshot-i za poslednjih 12, slanje na MQTT, WebSocket i log, listener za LLM opise |
-| `motion_mgr.c` | Detekcija pokreta: JPEG se dekodira u razmeri 1:8 u mrežu 96×72, poređenje sa prilagodljivom pozadinom, kompenzacija osvetljenja, do 4 zone, prelazak linije (težište promena, histereza) |
+| `motion_mgr.c` | Detekcija pokreta: JPEG se dekodira u razmeri 1:8 u mrežu 96×72, poređenje sa prilagodljivom pozadinom, kompenzacija osvetljenja, do 4 zone, prelazak linije (težište promena, histereza), tamper (mapa ivica naspram reference: prekrivena / pomerena) |
 | `person_mgr.cc` | Lokalna detekcija osobe: TFLite Micro model 96×96, isečak oko pokreta, potvrda i timeout |
 | `ai_mgr.c` | Eksterni AI: POST JPEG-a na server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom |
 | `llm_mgr.c` | Opis događaja vision LLM-om (Ollama `/api/chat` ili OpenAI-kompatibilni API), cooldown, bez gomilanja zahteva |
-| `sysmon.c` | Opterećenje CPU-a po jezgru, heap/PSRAM, lista taskova, telemetrija modula |
+| `sysmon.c` | Opterećenje CPU-a po jezgru, heap/PSRAM/DMA (ukupno, slobodno, minimum), veličina firmware-a, lista taskova, telemetrija modula |
 | `status_led.c` | Statusni LED (GPIO 2) |
 | `console_cmds.c` | Serijska konzola (UART, 115200) |
 | `app_config.c` | NVS inicijalizacija, Wi-Fi i sistemska podešavanja, factory reset, brojač boot-ova |
