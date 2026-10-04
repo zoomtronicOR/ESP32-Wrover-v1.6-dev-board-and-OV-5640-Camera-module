@@ -445,7 +445,7 @@ function renderStatus(s) {
     dot(!tp.enabled ? '' : tp.state === 'alarm' ? 'bad' : 'ok', !tp.enabled ? 'Tamper: off' : tp.state === 'alarm' ? 'Tamper: ' + tp.reason + '!' : 'Tamper: ok') +
     dot(!mo.enabled ? '' : mo.active ? 'bad' : 'ok', 'Motion' + (!mo.enabled ? ': off' : mo.active ? '!' : '')) +
     dot(pe.state === 'off' ? '' : pe.present ? 'bad' : 'ok', 'Person' + (pe.state === 'off' ? ': off' : pe.present ? '!' : '')) +
-    dot(ai.state === 'off' ? '' : ai.state === 'error' ? 'warn' : (ai.objects || []).some(o => o.present) ? 'bad' : 'ok', 'AI' + (ai.state === 'off' ? ': off' : (ai.objects || []).filter(o => o.present).map(o => ': ' + o.label).join('')));
+    dot(ai.state === 'off' ? '' : ai.state === 'error' ? 'warn' : (ai.objects || []).some(o => o.present) ? 'bad' : 'ok', 'AI' + (ai.state === 'off' ? ': off' : (ai.objects || []).filter(o => o.present).map(o => o.label).join(', ').replace(/^(?=.)/, ': ')));
   $('metrics').innerHTML = m.map(([k, v]) => `<div class="metric"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
   $('ovl-l').textContent = s.time || '';
   $('ovl-r').textContent = `${c.fps.toFixed(1)} fps · ${s.wifi.connected ? s.wifi.rssi + ' dBm' : 'AP'}`;
