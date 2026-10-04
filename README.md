@@ -271,8 +271,8 @@ Statistika se čuva samo u RAM-u, jer brisanje flash-a dok kamera radi zaglavi o
 ## Kamera, grejanje i standby
 
 - OV5640 se primetno greje kad neprekidno snima. Hladnjak na modulu je preporučen.
-- **OV5640 (WROVER):** kad niko ne gleda stream ni ne traži slike, senzor posle 10 s prelazi u **standby** (softverski power-down). Pri sledećem zahtevu se budi za ~0,5 s. Ovo se isključuje opcijom *Sensor standby when idle* na Camera tabu.
-- **OV2640 (ESP32-CAM):** standby se ne koristi. Softverski standby (COM2) na ovom modulu ugasi SCCB komunikaciju, a senzor se vraća tek kad se isključi napajanje. Restart ESP32 i OTA ne prekidaju napajanje kamere.
+- **OV5640:** odmah posle pokretanja, i kad niko ne gleda stream ni ne traži slike 10 s, senzor prelazi u **standby** (softverski power-down). Pri sledećem zahtevu se budi za ~0,5 s. Standby pri pokretanju smanjuje strujni udar dok se pali Wi-Fi. Ovo se isključuje opcijom *Sensor standby when idle* na Camera tabu.
+- **OV2640:** standby se ne koristi. Softverski standby (COM2) na ovom modulu ugasi SCCB komunikaciju, a senzor se vraća tek kad se isključi napajanje. Restart ESP32 i OTA ne prekidaju napajanje kamere.
 - **Detekcija pokreta i sabotaže drže senzor stalno budnim**, jer im trebaju frame-ovi. Isto važi za lokalnu detekciju osobe i prelazak linije, koji rade na osnovu pokreta.
 - Podrazumevani *Gain ceiling* za OV5640 je 200 (~12,5x). Veća vrednost daje svetliju sliku pri slabom svetlu, ali i više šuma.
 
@@ -361,6 +361,9 @@ automation:
 - **Nisu urađeni:** HTTPS za web UI i MQTT preko TLS-a (kamera je predviđena za lokalnu mrežu).
 - **microSD:** WROVER ploča nema slot (GPIO 4 je kamera); microSD radi samo na ESP32-CAM-u. Firmware za ESP32-CAM zauzima oko 96 % OTA slota.
 - **ESP32-CAM:** treba mu stabilno eksterno napajanje od 5 V, a za flešovanje preko USB-a IO0 + RST (vidi [Ploča 2](#ploča-2-ai-thinker-esp32-cam--ov2640)).
+- **Napajanje WROVER-a:** na slabom USB napajanju ploča posle uključivanja ponekad ne krene dok se ne pritisne RST. Snimljeni logovi pokazuju dva slučaja: brownout petlju u trenutku pokretanja Wi-Fi-ja (strujni vrhovi 400–500 mA) i čip koji uopšte ne krene (spor porast napona / EN). Firmware smanjuje opterećenje (senzor u standby-ju dok se pali Wi-Fi), a pravo rešenje je hardversko: jače napajanje od 5 V i kratak kabl, 470–1000 µF na 5V i 1–10 µF na EN pinu.
+- **OV5640 do 2048×1536:** na ESP32 sa 4 MB PSRAM-a veće rezolucije povremeno ne isporuče frejm, a puni 5 MP (2592×1944) ne radi ni na jednom XCLK taktu. Detalji u sekciji [Modul kamere](#modul-kamere).
+- **Autofokus (OV5640):** drajver esp32-camera odustaje od AF komandi posle 2 s, a senzoru treba ~4 s; firmware zato šalje AF komande sam. Radi samo na modulima sa motorom za fokus.
 
 ## Struktura repozitorijuma
 
@@ -393,9 +396,14 @@ platformio.ini        PlatformIO okruženja `wrover` i `esp32cam` (COM port, fla
 - [x] **Statistika:** po satu za 24 h (pokreti, osobe, objekti, IN/OUT, tamper, FPS, RSSI, CPU, memorija), Stats tab sa grafikonima
 - [x] **Faza 6, microSD (ESP32-CAM):** slike događaja, zakazani i ručni timelapse, pregled i preuzimanje fajlova i foldera (ZIP), eject/mount/format
 - [x] **ESP32-CAM + OV2640:** druga ploča (okruženje `esp32cam`), izbor modula kamere na Camera tabu, dijagnostika SCCB magistrale
+- [x] **Rezervna kopija podešavanja** (§27): izvoz/uvoz u JSON, lozinke samo uz izričitu opciju
+- [x] **Autofokus OV5640** (continuous i single), pristup registrima senzora (`/api/camera/reg`)
 - [x] **Resursi:** trake iskorišćenosti (CPU, RAM, PSRAM, DMA, particija, NVS, stream slotovi, Wi-Fi) na System tabu
 
 **Sledeće:**
+- [ ] Privacy mode (§29)
+- [ ] Profili scene i automatski dan/noć (§28, §31)
+- [ ] GPIO i spoljni senzori (§30), remote syslog (§39)
 - [ ] HTTPS za web UI i MQTT preko TLS-a
 
 ## Licence

@@ -25,7 +25,7 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Podržane su dve
 
 | Modul | Uloga |
 |---|---|
-| `camera_mgr.c` | Init OV5640, **tabela parametara** (opseg, setter, NVS ključ) iz koje se generišu API i Camera tab, prepoznavanje mogućnosti senzora u runtime-u, **frame hub**, watchdog (restart drajvera posle 5 grešaka), standby senzora kad niko ne gleda, `cam_mgr_suspend()` oko upisa u flash |
+| `camera_mgr.c` | Init kamere (OV5640 ili OV2640, prepoznaje se po PID-u), **tabela parametara** (opseg, setter, NVS ključ) iz koje se generišu API i Camera tab, opsezi po senzoru (OV5640 do 2048×1536, OV2640 do 1600×1200), JPEG baferi po trenutnoj rezoluciji (veća rezolucija restartuje drajver, od Full HD jedan bafer), **frame hub** (slotovi se oslobađaju pri restartu i pod pritiskom memorije), watchdog (restart drajvera posle 5 grešaka), standby OV5640 odmah posle inicijalizacije i kad niko ne gleda, AF komande za OV5640 (standardni redosled, status iz registra 0x3029), pristup registrima i sken SCCB magistrale, `cam_mgr_suspend()` oko upisa u flash |
 | `web_server.c` | Dva HTTP servera: port 80 (UI, `/api/*`, `/capture`, WebSocket) i port 81 (MJPEG, task po klijentu, do 3). Svaki API handler prolazi kroz `guarded()` proveru prijave. OTA upload i rollback |
 | `auth_mgr.c` | Lozinka (PBKDF2-SHA256 + salt), sesije (HttpOnly cookie), API token, HTTP Basic, zaključavanje posle pogrešnih pokušaja, inicijalni podaci `admin` / `espadmin` |
 | `wifi_mgr.c` | STA sa ponovnim povezivanjem, setup AP kao rezerva, mDNS, SNTP (Europe/Belgrade), vreme iz browsera kao rezerva |
@@ -37,8 +37,9 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Podržane su dve
 | `llm_mgr.c` | Opis događaja vision LLM-om (Ollama `/api/chat` ili OpenAI-kompatibilni API), cooldown, bez gomilanja zahteva |
 | `stats_mgr.c` | Statistika: 24 satna bucket-a u RAM-u, brojači iz događaja i uzorci zdravlja na 10 s; sati po uptime-u dok se ne podesi sat |
 | `sd_mgr.c` | microSD (samo ESP32-CAM, SDMMC 1-bit): montiranje kad je kartica u slotu, upis slika događaja iz zasebnog task-a, timelapse preko frame huba, brisanje najstarijih dana, ZIP folder u hodu |
+| `backup.c` | Izvoz i uvoz podešavanja svih modula u jedan JSON (spec §27); lozinke samo uz izričitu opciju, podešavanja prijave nikad |
 | `sysmon.c` | Opterećenje CPU-a po jezgru, heap/PSRAM/DMA (ukupno, slobodno, minimum), veličina firmware-a, lista taskova, telemetrija modula |
-| `status_led.c` | Statusni LED (GPIO 2) |
+| `status_led.c` | Statusni LED (GPIO 2 na WROVER-u, GPIO 33 aktivan na niskom nivou na ESP32-CAM-u); na ESP32-CAM-u gasi i beli blic LED (GPIO 4) |
 | `console_cmds.c` | Serijska konzola (UART, 115200) |
 | `app_config.c` | NVS inicijalizacija, Wi-Fi i sistemska podešavanja, factory reset, brojač boot-ova |
 | `web/index.html` | Ceo web UI (vanilla JS, ugrađen u firmware) |
