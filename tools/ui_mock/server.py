@@ -57,8 +57,11 @@ def status():
     s['camera'].update({'fps': 12.4, 'frames': 2875012 + int((time.time() - START) * 12), 'quality': 10, 'frame_bytes': 61540,
                         'stream_clients': 1, 'stream_max': 3, 'errors': 0, 'restarts': 0})
     s['motion'] = motion_state()
+    # "today" per object = the stats hours since local midnight, so both views agree.
+    st, midnight = stats(), time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+    objs = [dict(o, today=sum(h['objects'][i] for h in st['hours'] if h['start'] >= midnight)) for i, o in enumerate(OBJECTS)]
     s['ai'] = {'state': 'ok', 'last_error': '', 'inferences': 18342, 'errors': 3, 'latency_ms': 212, 'fps': 1.0,
-               'last_object': 'person', 'objects': OBJECTS}
+               'last_object': 'person', 'objects': objs}
     s['llm'] = {'state': 'idle', 'requests': 14, 'errors': 0, 'skipped': 31, 'last_seconds': 1.2, 'last_error': '',
                 'last_text': 'Osoba u crvenoj jakni sa psom stoji na stazi ispred kuće, pored parkiranog plavog automobila.',
                 'test_running': False, 'test_text': ''}

@@ -14,7 +14,8 @@ Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](do
 | ![Camera](docs/screenshots/03-camera.jpg) **Camera**: sva podešavanja OV5640 senzora | ![Motion](docs/screenshots/04-motion.jpg) **Motion**: zone, linija za brojanje, tamper, heatmap razlika, stanje |
 | ![AI](docs/screenshots/05-ai.jpg) **AI**: lokalna detekcija osobe i šta model vidi | ![Events](docs/screenshots/06-events.jpg) **Events**: događaji sa snapshot-ima i AI opisima |
 | ![MQTT / HA](docs/screenshots/07-mqtt-ha.jpg) **MQTT / HA**: broker i Home Assistant discovery | ![System](docs/screenshots/08-system.jpg) **System**: sigurnost, API token, OTA, iskorišćenost resursa, telemetrija |
-| ![AI server](docs/screenshots/10-ai-server.jpg) **AI**: eksterni AI server, praćenje objekata, test detekcije | ![Login](docs/screenshots/09-login.jpg) **Prijava** |
+| ![AI server](docs/screenshots/10-ai-server.jpg) **AI**: eksterni AI server, praćenje objekata, test detekcije | ![Stats](docs/screenshots/11-stats.jpg) **Stats**: detekcije po satu i zdravlje sistema za 24 h |
+| ![Login](docs/screenshots/09-login.jpg) **Prijava** | |
 
 ## Hardver
 
