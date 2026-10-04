@@ -27,7 +27,7 @@ Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](do
 | Kamera | OV5640, 5 MP, **sa autofokusom** | OV2640, 2 MP (UXGA), fiksni fokus |
 | Particije | `partitions.csv`: 2 × 3 MB OTA, coredump, storage | `partitions_4mb.csv`: 2 × 1,875 MB OTA, coredump |
 | Statusni LED | GPIO 2 | GPIO 33 (crveni, aktivan na niskom nivou) |
-| microSD | nema slota | ugrađen slot (SDMMC), podrška stiže u Fazi 6 |
+| microSD | nema slota | ugrađen slot (SDMMC 1-bit): slike događaja, timelapse, preuzimanje |
 | USB / flešovanje | CH340 na ploči, auto-reset radi | ESP32-CAM-MB adapter (CH340); posle prvog flešovanja preporučen OTA |
 | Napajanje | USB | **eksterno 5 V** (vidi napomene ispod) |
 | Standby senzora | da (OV5640 power-down) | ne (OV2640 ga ne podnosi, vidi ispod) |
@@ -52,7 +52,7 @@ pio run -e wrover -t menuconfig   # sdkconfig / pinovi
 
 - OV2640 na SCCB adresi 0x30. Pinout: PWDN 32, XCLK 0, SDA 26, SCL 27, D7..D0 = 35, 34, 39, 36, 21, 19, 18, 5, VSYNC 25, HREF 23, PCLK 22.
 - Statusni LED je crveni LED na GPIO 33. Beli blic LED (GPIO 4) firmware drži ugašenim.
-- GPIO 2, 4, 12, 13, 14 i 15 pripadaju microSD slotu.
+- microSD radi u 1-bitnom SDMMC modu (CLK 14, CMD 15, D0 2), pa GPIO 4 (blic) i GPIO 12 (strapping pin za napon flash-a) ostaju van upotrebe.
 - **Napajanje:** napajana preko USB-a i MB adaptera, kamera nije odgovarala na SCCB magistrali, a ploča se pri uključivanju zaustavljala u download modu. Na stabilnom **eksternom napajanju od 5 V** (pin 5V i GND, bar 500 mA) sve radi. Ne napajaj je preko pina 3V3.
 - **Prvo flešovanje preko MB adaptera:** auto-reset ne radi pouzdano. Drži **IO0**, kratko pritisni **RST**, pusti IO0, pa pokreni upload. Posle upisa pritisni samo RST (ili isključi i uključi napajanje) da se pokrene firmware.
 - **Kasnije: OTA.** Kad je ploča na mreži, firmware se šalje sa System → Firmware update (`.pio/build/esp32cam/firmware.bin`), bez tastera i USB-a.
@@ -106,6 +106,11 @@ Zaštita je uključena od prvog pokretanja. Dok je inicijalna lozinka aktivna, w
 | GET/POST | `/api/wifi` | Wi-Fi podešavanja |
 | GET | `/api/wifi/scan` | Skeniranje mreža |
 | GET | `/api/camera/scan` | Sken SCCB magistrale (dijagnostika kamere) |
+| GET/POST | `/api/sd` | microSD: podešavanja i stanje kartice (samo ESP32-CAM) |
+| GET | `/api/sd/files?dir=X` | Sadržaj foldera na kartici |
+| GET | `/api/sd/files?path=X[&dl=1]` | Fajl sa kartice (`dl=1` = preuzimanje) |
+| GET | `/api/sd/files?zip=X` | Ceo folder kao ZIP |
+| POST | `/api/sd/action` | `{"action": "tl_start" \| "tl_stop" \| "eject" \| "mount" \| "format"}` |
 | GET/POST | `/api/system` | Informacije o sistemu i lista taskova; POST `{"device_name"}` |
 | POST | `/api/time` | `{"epoch": <unix s>}`: postavlja vreme iz browsera ako NTP ne radi |
 | POST | `/api/login`, `/api/logout` | Prijava (session cookie) / odjava |
@@ -225,6 +230,18 @@ Kamera može da pošalje snapshot događaja (pokret ili AI objekat) vision model
 
 Šalje se samo jedna slika po događaju, uz cooldown, pa i spori CPU modeli rade.
 
+## microSD i timelapse (ESP32-CAM)
+
+Tab **Storage** (spec §18, §19). Na WROVER ploči tab samo kaže da ploča nema slot.
+- **Kartica je montirana uvek kad je u slotu.** Fajlovi se mogu pregledati i preuzimati i kad je snimanje isključeno. Kartica treba da bude FAT32.
+- **Recording** (podrazumevano isključeno) uključuje upis na karticu: slike događaja (pokret, osoba, AI objekat, tamper, linija) i zakazani timelapse.
+- **Raspored fajlova:** `EVENTS/YYYYMMDD/HHMMSSTn.JPG` (T = vrsta događaja: M pokret, P osoba, O objekat, T tamper, L linija) i `TLAPSE/YYYYMMDD/HHMMSSn.JPG`.
+- **Max usage % i Delete oldest:** kad kartica pređe zadatu zauzetost, brišu se najstariji dani.
+- **Timelapse:** zakazani radi od *Start hour* do *Stop hour* na zadatom intervalu (isti sat za početak i kraj znači ceo dan; potrebno je podešeno vreme). **Start timelapse now / Stop timelapse** pokreću ga ručno, nezavisno od rasporeda. Kad se završi, događaj `timelapse_done` (i MQTT) javlja broj slika tog dana. Slike su u trenutnoj rezoluciji streama.
+- **Fajlovi:** pregled po folderima, dugme *Download* pored svakog fajla i *Download ZIP* za folder. ZIP se pravi u hodu, bez kompresije, jer su JPEG-ovi već kompresovani.
+- **Eject (safe removal)** pre vađenja kartice, **Mount** posle ubacivanja, **Format card** briše celu karticu (traži potvrdu).
+- Događaji `sd_inserted` / `sd_removed` / `timelapse_done`; HA senzori „SD card“ i „SD free“.
+
 ## Statistika
 
 Tab **Stats** prikazuje poslednja 24 sata, po satu:
@@ -327,7 +344,7 @@ automation:
 - **Lokalna detekcija osobe** daje samo „osoba da/ne“. Za više klasa i okvire koristi se eksterni AI server.
 - **Prelazak linije** prati jedno težište pokreta, pa je najpouzdaniji kad kroz prolaz ide jedna osoba odjednom.
 - **Nisu urađeni:** HTTPS za web UI i MQTT preko TLS-a (kamera je predviđena za lokalnu mrežu).
-- **microSD:** WROVER ploča nema slot (GPIO 4 je kamera). ESP32-CAM ima ugrađen slot; podrška stiže u Fazi 6.
+- **microSD:** WROVER ploča nema slot (GPIO 4 je kamera); microSD radi samo na ESP32-CAM-u. Firmware za ESP32-CAM zauzima oko 96 % OTA slota.
 - **ESP32-CAM:** treba mu stabilno eksterno napajanje od 5 V, a za flešovanje preko USB-a IO0 + RST (vidi [Ploča 2](#ploča-2-ai-thinker-esp32-cam--ov2640)).
 
 ## Struktura repozitorijuma
@@ -359,11 +376,12 @@ platformio.ini        PlatformIO okruženja `wrover` i `esp32cam` (COM port, fla
 - [x] **Faza 8, sigurnost:** prijava, API token, HTTP Basic, zaključavanje, zaštićeni OTA sa rollback-om
 - [x] **Tamper alarm:** kamera prekrivena, zaslepljena ili pomerena (događaji, MQTT, HA senzor)
 - [x] **Statistika:** po satu za 24 h (pokreti, osobe, objekti, IN/OUT, tamper, FPS, RSSI, CPU, memorija), Stats tab sa grafikonima
+- [x] **Faza 6, microSD (ESP32-CAM):** slike događaja, zakazani i ručni timelapse, pregled i preuzimanje fajlova i foldera (ZIP), eject/mount/format
 - [x] **ESP32-CAM + OV2640:** druga ploča (okruženje `esp32cam`), izbor modula kamere na Camera tabu, dijagnostika SCCB magistrale
 - [x] **Resursi:** trake iskorišćenosti (CPU, RAM, PSRAM, DMA, particija, NVS, stream slotovi, Wi-Fi) na System tabu
 
 **Sledeće:**
-- [ ] Faza 6: microSD u ugrađenom slotu ESP32-CAM-a (SDMMC, podrazumevano isključen), timelapse
+- [ ] HTTPS za web UI i MQTT preko TLS-a
 
 ## Licence
 

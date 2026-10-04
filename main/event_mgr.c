@@ -63,6 +63,9 @@ static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
     [EV_OTA_FINISHED] = "ota_finished",
     [EV_TAMPER] = "tamper",
     [EV_TAMPER_CLEARED] = "tamper_cleared",
+    [EV_SD_INSERTED] = "sd_inserted",
+    [EV_SD_REMOVED] = "sd_removed",
+    [EV_TIMELAPSE_DONE] = "timelapse_done",
 };
 
 static QueueHandle_t s_queue;

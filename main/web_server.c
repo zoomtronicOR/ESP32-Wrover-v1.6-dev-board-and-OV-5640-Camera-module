@@ -17,6 +17,7 @@
 #include "event_mgr.h"
 #include "llm_mgr.h"
 #include "motion_mgr.h"
+#include "sd_mgr.h"
 #include "stats_mgr.h"
 #include "person_mgr.h"
 #include "mqtt_mgr.h"
@@ -188,7 +189,7 @@ cJSON *web_status_json(void)
     cJSON *m = cJSON_AddObjectToObject(o, "modules");
     cJSON_AddStringToObject(m, "mqtt", mqtt_mgr_state());
     cJSON_AddStringToObject(m, "ha", mqtt_mgr_ha_state());
-    cJSON_AddStringToObject(m, "sd", "n/a");
+    cJSON_AddStringToObject(m, "sd", sd_mgr_state());
     cJSON_AddStringToObject(m, "ai", ai_mgr_state());
     cJSON_AddStringToObject(m, "llm", llm_mgr_state());
     cJSON_AddStringToObject(m, "person", person_mgr_state());
@@ -660,9 +661,16 @@ static esp_err_t mqtt_discovery_post(httpd_req_t *req)
     return send_result(req, e, e == ESP_ERR_INVALID_STATE ? "MQTT not connected or discovery disabled" : NULL);
 }
 
+// GET returns the last scan result; POST starts a new background scan.
 static esp_err_t wifi_scan_get(httpd_req_t *req)
 {
-    return send_json(req, wifi_mgr_scan(), NULL);
+    return send_json(req, wifi_mgr_scan_json(), NULL);
+}
+
+static esp_err_t wifi_scan_post(httpd_req_t *req)
+{
+    esp_err_t err = wifi_mgr_scan_start();
+    return send_result(req, err, err == ESP_OK ? NULL : esp_err_to_name(err));
 }
 
 /* ------------------------------------------------------------------ API: motion/events ---- */
@@ -686,6 +694,79 @@ static esp_err_t motion_post(httpd_req_t *req)
     esp_err_t e = motion_mgr_set_config(body, err, sizeof(err));
     cJSON_Delete(body);
     return send_result(req, e, err[0] ? err : NULL);
+}
+
+/* ------------------------------------------------------------------ API: microSD ---------- */
+
+static esp_err_t sd_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "config", sd_mgr_config_json());
+    cJSON_AddItemToObject(o, "state", sd_mgr_state_json());
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t sd_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!cJSON_IsObject(body)) {
+        cJSON_Delete(body);
+        return send_result(req, ESP_ERR_INVALID_ARG, "expected a JSON object");
+    }
+    char err[64] = "";
+    esp_err_t e = sd_mgr_set_config(body, err, sizeof(err));
+    cJSON_Delete(body);
+    return send_result(req, e, err[0] ? err : NULL);
+}
+
+// httpd_query_key_value() returns the raw value: decode %XX and '+' in place.
+static void url_decode(char *s)
+{
+    char *o = s;
+    for (; *s; s++, o++) {
+        if (*s == '%' && s[1] && s[2]) {
+            char hex[3] = {s[1], s[2], 0};
+            *o = (char)strtol(hex, NULL, 16);
+            s += 2;
+        } else {
+            *o = *s == '+' ? ' ' : *s;
+        }
+    }
+    *o = 0;
+}
+
+// ?dir=X lists a folder, ?path=X sends a file (&dl=1 as a download), ?zip=X a folder as ZIP.
+static esp_err_t sd_files_get(httpd_req_t *req)
+{
+    char q[160] = "", v[96] = "", dl[4] = "";
+    httpd_req_get_url_query_str(req, q, sizeof(q));
+    if (httpd_query_key_value(q, "path", v, sizeof(v)) == ESP_OK) {
+        url_decode(v);
+        httpd_query_key_value(q, "dl", dl, sizeof(dl));
+        return sd_mgr_send_file(req, v, dl[0] == '1');
+    }
+    if (httpd_query_key_value(q, "zip", v, sizeof(v)) == ESP_OK || strstr(q, "zip=")) {
+        url_decode(v);
+        return sd_mgr_send_zip(req, v);
+    }
+    httpd_query_key_value(q, "dir", v, sizeof(v));
+    url_decode(v);
+    char err[48] = "";
+    cJSON *o = sd_mgr_list_json(v, err, sizeof(err));
+    if (!o) {
+        return send_result(req, ESP_FAIL, err);
+    }
+    return send_json(req, o, NULL);
+}
+
+static esp_err_t sd_action_post(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    const char *a = body ? json_str(body, "action") : NULL;
+    char err[64] = "";
+    esp_err_t e = a ? sd_mgr_action(a, err, sizeof(err)) : ESP_ERR_INVALID_ARG;
+    cJSON_Delete(body);
+    return send_result(req, e, err[0] ? err : (a ? NULL : "expected {\"action\": ...}"));
 }
 
 static esp_err_t stats_get(httpd_req_t *req)
@@ -997,7 +1078,7 @@ esp_err_t web_server_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     cfg.ctrl_port = 32768;
-    cfg.max_uri_handlers = 56;
+    cfg.max_uri_handlers = 64;
     cfg.max_open_sockets = 7;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
@@ -1032,12 +1113,17 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/wifi", HTTP_GET, wifi_get);
     reg(s_api, "/api/wifi", HTTP_POST, wifi_post);
     reg(s_api, "/api/wifi/scan", HTTP_GET, wifi_scan_get);
+    reg(s_api, "/api/wifi/scan", HTTP_POST, wifi_scan_post);
     reg(s_api, "/api/mqtt", HTTP_GET, mqtt_get);
     reg(s_api, "/api/mqtt", HTTP_POST, mqtt_post);
     reg(s_api, "/api/mqtt/discovery", HTTP_POST, mqtt_discovery_post);
     reg(s_api, "/api/motion", HTTP_GET, motion_get);
     reg(s_api, "/api/motion", HTTP_POST, motion_post);
     reg(s_api, "/api/motion/debug", HTTP_GET, motion_debug_get);
+    reg(s_api, "/api/sd", HTTP_GET, sd_get);
+    reg(s_api, "/api/sd", HTTP_POST, sd_post);
+    reg(s_api, "/api/sd/files", HTTP_GET, sd_files_get);
+    reg(s_api, "/api/sd/action", HTTP_POST, sd_action_post);
     reg(s_api, "/api/stats", HTTP_GET, stats_get);
     reg(s_api, "/api/stats/reset", HTTP_POST, stats_reset_post);
     reg(s_api, "/api/ai", HTTP_GET, ai_get);

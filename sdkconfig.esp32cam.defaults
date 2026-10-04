@@ -2,3 +2,6 @@
 CONFIG_CAM_BOARD_AI_THINKER=y
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
+
+# FAT buffers (4 KB per open file, format work buffer) in PSRAM: internal RAM is tight
+CONFIG_FATFS_ALLOC_PREFER_EXTRAM=y

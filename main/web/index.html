@@ -34,7 +34,7 @@ section{display:none}section.active{display:block}
 .legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted);margin:2px 0 4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 #sttip{position:fixed;pointer-events:none;z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.18);display:none;white-space:nowrap}
 #sttip b{display:block;margin-bottom:2px}#sttip i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
-#stobjects th.num{text-align:right}.sttable{overflow-x:auto}.sttable td,.sttable th{white-space:nowrap;text-align:right}.sttable td:first-child,.sttable th:first-child{text-align:left}
+#stobjects th.num{text-align:right}#sdfiles a{color:var(--accent);text-decoration:none}#sdfiles td:last-child{text-align:right;white-space:nowrap}#sdfiles a.b{padding:3px 10px;font-size:12px;text-decoration:none;display:inline-block;background:transparent;color:var(--text);border:1px solid var(--line);border-radius:6px}#sdfiles a.b:hover{border-color:var(--accent);text-decoration:none}#sdfiles a:hover{text-decoration:underline}.sttable{overflow-x:auto}.sttable td,.sttable th{white-space:nowrap;text-align:right}.sttable td:first-child,.sttable th:first-child{text-align:left}
 .ind{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:13px}.ind span{display:inline-flex;align-items:center;gap:6px}.ind .dot{width:11px;height:11px}
 .metric .k{font-size:12px;color:var(--muted)}.metric .v{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
 .cols{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:14px}
@@ -108,6 +108,7 @@ progress{width:100%;height:14px}
   <button data-tab="ai">AI</button>
   <button data-tab="events">Events</button>
   <button data-tab="stats">Stats</button>
+  <button data-tab="storage">Storage</button>
   <button data-tab="mqtt">MQTT / HA</button>
   <button data-tab="network">Network</button>
   <button data-tab="system">System</button>
@@ -258,6 +259,31 @@ progress{width:100%;height:14px}
       <h2 style="margin-top:14px">Test answer</h2><p id="llmtest" class="muted">—</p>
     </div>
   </div>
+</section>
+
+<section id="storage">
+  <div class="card" id="sdna" style="display:none"><h2>microSD</h2><p class="muted">This board has no microSD slot. The AI-Thinker ESP32-CAM build (env <code>esp32cam</code>) supports its built-in slot.</p></div>
+  <div class="cols" id="sdmain">
+    <div class="card"><h2>microSD</h2>
+      <form class="f" id="sdform">
+        <label>Recording</label><div><input type="checkbox" id="sd_enabled" class="switch"> <span class="muted">write to the card (off by default)</span></div>
+        <label>Event snapshots</label><div><input type="checkbox" id="sd_events" class="switch"> <span class="muted">save event images to the card</span></div>
+        <label>Max usage %</label><input type="number" id="sd_max_pct" min="10" max="99">
+        <label>Delete oldest</label><div><input type="checkbox" id="sd_delete_oldest" class="switch"> <span class="muted">free space by deleting the oldest days</span></div>
+        <label>Timelapse</label><div><input type="checkbox" id="sd_tl_enabled" class="switch"> <span class="muted">on a schedule (needs Recording)</span></div>
+        <label>Interval (s)</label><input type="number" id="sd_tl_interval_s" min="5" max="3600">
+        <label>Start hour</label><input type="number" id="sd_tl_start_h" min="0" max="23">
+        <label>Stop hour</label><input type="number" id="sd_tl_stop_h" min="0" max="23">
+        <span></span><div><button class="b" type="submit">Save</button></div>
+      </form>
+      <div class="toolbar"><button class="b sec" id="tlstart">Start timelapse now</button><button class="b sec" id="tlstop">Stop timelapse</button></div>
+      <p class="muted">The card stays mounted whenever it is in the slot, so files can be browsed and downloaded with recording off. <b>Start timelapse now</b> runs at the interval above until <b>Stop</b>, regardless of the schedule. Scheduled timelapse needs the clock to be set; start = stop means all day. Frames use the current stream resolution. When a timelapse ends, a <code>timelapse_done</code> event (MQTT) reports the day's count.</p>
+    </div>
+    <div class="card"><h2>Card</h2><table id="sdstate"></table>
+      <div class="toolbar"><button class="b sec" id="sdeject">Eject (safe removal)</button><button class="b sec" id="sdmount">Mount</button><button class="b danger" id="sdformat">Format card</button></div>
+      <div id="fmtbox" style="display:none;margin-top:10px"><progress id="fmtprog" value="0" max="100"></progress><div class="muted" id="fmttxt"></div></div></div>
+  </div>
+  <div class="card" id="sdfilescard"><h2>Files <span class="muted" id="sdpath" style="font-weight:400"></span></h2><table id="sdfiles"></table></div>
 </section>
 
 <section id="stats">
@@ -420,6 +446,7 @@ function showTab(id) {
   if (id === 'motion') loadMotion();
   if (id === 'events') loadEvents();
   clearInterval(statsTimer);
+  if (id === 'storage') loadSd();
   if (id === 'stats') { loadStats(); statsTimer = setInterval(loadStats, 30000); }
   if (id === 'ai') { loadAi(); loadLlm(); loadPerson(); }
   clearInterval(telTimer);
@@ -449,7 +476,7 @@ function renderStatus(s) {
     pill('Motion', s.motion && s.motion.enabled ? (s.motion.active ? 'bad' : 'ok') : '', s.motion && s.motion.active ? 'motion!' : 'idle') +
     (s.motion && s.motion.tamper && s.motion.tamper.enabled ? pill('Tamper', s.motion.tamper.state === 'alarm' ? 'bad' : s.motion.tamper.state === 'learning' ? 'warn' : 'ok', 'tamper: ' + (s.motion.tamper.state === 'alarm' ? s.motion.tamper.reason + '!' : s.motion.tamper.state)) : '') +
     pill('Person', s.person && s.person.state !== 'off' ? (s.person.present ? 'bad' : 'ok') : '', s.person ? 'local person: ' + (s.person.present ? 'present' : s.person.state) : '') +
-    pill('SD', mod(s.modules.sd), 'Phase 6') + pill('AI', { ok: 'ok', idle: 'ok', error: 'bad' }[s.modules.ai] || '', 'AI ' + s.modules.ai);
+    pill('SD', { ok: 'ok', mounted: 'ok', 'no card': '', ejected: 'warn' }[s.modules.sd] || '', 'SD ' + s.modules.sd) + pill('AI', { ok: 'ok', idle: 'ok', error: 'bad' }[s.modules.ai] || '', 'AI ' + s.modules.ai);
   const c = s.camera;
   const m = [
     ['Sensor', c.ok ? (c.standby ? 'standby' : 'active') : 'error'], ['Camera FPS', c.fps.toFixed(1)], ['Resolution', c.width ? c.width + '×' + c.height : '—'], ['JPEG quality', c.quality],
@@ -691,6 +718,69 @@ function renderMotState() {
   $('motstate').innerHTML = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
 }
 
+/* ---------- storage (microSD) ---------- */
+const SD_NUM = ['max_pct', 'tl_interval_s', 'tl_start_h', 'tl_stop_h'], SD_BOOL = ['enabled', 'events', 'delete_oldest', 'tl_enabled'];
+let sdDir = '';
+async function loadSd() {
+  try {
+    const d = await api('/api/sd'), c = d.config, st = d.state;
+    $('sdna').style.display = st.supported ? 'none' : ''; $('sdmain').style.display = st.supported ? '' : 'none'; $('sdfilescard').style.display = st.supported ? '' : 'none';
+    if (!st.supported) return;
+    for (const k of SD_NUM) $('sd_' + k).value = c[k];
+    for (const k of SD_BOOL) $('sd_' + k).checked = c[k];
+    $('sdstate').innerHTML = [['State', st.state], ['Timelapse', st.timelapse], ['Card', st.card || '—'], ['Size', st.total_mb ? st.total_mb + ' MB' : '—'],
+      ['Free', st.total_mb ? `${st.free_mb} MB (${100 - st.used_pct}%)` : '—'], ['Files written', st.writes], ['Write errors', st.errors],
+      ['Deleted (space)', st.deleted], ['Timelapse today', st.timelapse_today], ['Last error', st.last_error || '—']]
+      .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
+    if (st.mounted) loadSdDir(sdDir); else $('sdfiles').innerHTML = '<tr><td class="muted">No card mounted.</td></tr>';
+  } catch (e) { toast(e.message); }
+}
+async function loadSdDir(dir) {
+  try {
+    const r = await api('/api/sd/files?dir=' + encodeURIComponent(dir)); sdDir = dir;
+    $('sdpath').textContent = '/' + dir;
+    const q = encodeURIComponent, up = dir ? `<tr><td colspan="2"><a href="#" data-dir="${esc(dir.split('/').slice(0, -1).join('/'))}">⬑ up</a></td><td><a class="b sec" href="/api/sd/files?zip=${q(dir)}">Download folder (ZIP)</a></td></tr>` : '';
+    const rows = r.entries.filter(e => !e.name.startsWith('SYSTEM~')).reverse().map(e => {
+      const p = (dir ? dir + '/' : '') + e.name;
+      return e.dir ? `<tr><td><a href="#" data-dir="${esc(p)}">📁 ${esc(e.name)}</a></td><td></td><td><a class="b sec" href="/api/sd/files?zip=${q(p)}">Download ZIP</a></td></tr>`
+        : `<tr><td><a href="/api/sd/files?path=${q(p)}" target="_blank">${esc(e.name)}</a></td><td class="num">${fmtBytes(e.size)}</td><td><a class="b sec" href="/api/sd/files?path=${q(p)}&dl=1" download="${esc(e.name)}">Download</a></td></tr>`; });
+    $('sdfiles').innerHTML = up + (rows.length ? rows.join('') : '<tr><td class="muted">empty</td></tr>');
+  } catch (e) { $('sdfiles').innerHTML = `<tr><td class="muted">${esc(e.message)}</td></tr>`; }
+}
+$('sdfiles').onclick = e => { const a = e.target.closest('a[data-dir]'); if (a) { e.preventDefault(); loadSdDir(a.dataset.dir); } };
+const sdAction = async (action, msg) => { try { await api('/api/sd/action', { action }); toast(msg); setTimeout(loadSd, 1500); } catch (x) { toast(x.message); } };
+$('tlstart').onclick = () => sdAction('tl_start', 'Timelapse started');
+$('tlstop').onclick = () => sdAction('tl_stop', 'Timelapse stopped');
+$('sdeject').onclick = () => sdAction('eject', 'Card ejected: safe to remove');
+$('sdmount').onclick = () => sdAction('mount', 'Card mounted');
+// Format progress: the FAT API reports none, so the bar follows the device's estimate
+// (card size x measured rate) and holds at 95 % until the card reports completion.
+async function pollFormat() {
+  $('fmtbox').style.display = ''; $('sdformat').disabled = true;
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1000));
+    let f; try { f = (await api('/api/sd')).state.format; } catch (e) { continue; }
+    if (f.running) {
+      const pct = Math.min(95, f.elapsed_s / Math.max(1, f.estimate_s) * 100);
+      $('fmtprog').value = pct; $('fmttxt').textContent = `Formatting… ${f.elapsed_s} s of ~${f.estimate_s} s (estimated)`;
+      continue;
+    }
+    $('fmtprog').value = 100; $('fmttxt').textContent = 'Format ' + (f.result || 'done');
+    $('sdformat').disabled = false; toast('Format ' + (f.result || 'done')); loadSd(); sdDir = ''; return;
+  }
+}
+$('sdformat').onclick = async () => {
+  if (!confirm('Format the microSD card? ALL files on it will be deleted.')) return;
+  try { await api('/api/sd/action', { action: 'format' }); $('fmtprog').value = 0; $('fmttxt').textContent = 'Starting…'; pollFormat(); } catch (x) { toast(x.message); }
+};
+$('sdform').onsubmit = async e => {
+  e.preventDefault();
+  const body = {};
+  for (const k of SD_NUM) body[k] = Number($('sd_' + k).value);
+  for (const k of SD_BOOL) body[k] = $('sd_' + k).checked;
+  try { await api('/api/sd', body); toast('microSD settings saved'); setTimeout(loadSd, 1500); } catch (x) { toast(x.message); }
+};
+
 /* ---------- stats ---------- */
 let stats = null, statsTimer = null, statsTable = false;
 const SC = ['var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)'], SOTHER = 'var(--s5)';
@@ -817,6 +907,9 @@ function onEvent(e) {
   if (e.event === 'person_detected_local') toast(`Person (on-device)${e.zone ? ' in ' + e.zone : ''}: ${e.value}%`);
   if (e.event === 'tamper') toast(`Tamper alarm: ${e.detail || ''}`);
   if (e.event === 'tamper_cleared') toast(`Tamper cleared: ${e.detail || ''}`);
+  if (e.event === 'sd_inserted') toast(`microSD mounted: ${e.detail || ''} (${e.value} MB)`);
+  if (e.event === 'sd_removed') toast(`microSD unmounted: ${e.detail || ''}`);
+  if (e.event === 'timelapse_done') toast(`Timelapse done: ${e.value} frame(s)`);
   if (e.event === 'line_in' || e.event === 'line_out') toast(`Line crossed: ${e.event === 'line_in' ? 'IN' : 'OUT'} (${e.value} today)`);
 }
 $('evfilter').onchange = renderEvents;
@@ -1066,12 +1159,21 @@ $('wifiform').onsubmit = async e => {
   if ($('w_pass').value) body.pass = $('w_pass').value;
   try { await api('/api/wifi', body); toast('Saved, connecting…'); $('w_pass').value = ''; } catch (x) { toast(x.message); }
 };
+// The scan runs in the background: on the setup AP the link drops while the radio hops
+// channels, so failed polls are expected and simply retried.
 $('scanbtn').onclick = async () => {
   $('scanlist').innerHTML = '<li>scanning…</li>';
-  try {
-    const list = await api('/api/wifi/scan');
-    $('scanlist').innerHTML = list.length ? list.map(n => `<li data-ssid="${esc(n.ssid)}">${esc(n.ssid || '(hidden)')} · ${n.rssi} dBm · ch ${n.channel} · ${n.auth}</li>`).join('') : '<li>no networks found (retry while not connecting)</li>';
-  } catch (e) { $('scanlist').innerHTML = `<li>${esc(e.message)}</li>`; }
+  try { await api('/api/wifi/scan', {}); } catch (e) {}
+  const t0 = Date.now();
+  while (Date.now() - t0 < 25000) {
+    await new Promise(r => setTimeout(r, 1500));
+    let r; try { r = await api('/api/wifi/scan'); } catch (e) { continue; }
+    if (r.state === 'running') continue;
+    const list = r.networks;
+    $('scanlist').innerHTML = list.length ? list.map(n => `<li data-ssid="${esc(n.ssid)}">${esc(n.ssid || '(hidden)')} · ${n.rssi} dBm · ch ${n.channel} · ${n.auth}</li>`).join('') : '<li>no networks found, try again</li>';
+    return;
+  }
+  $('scanlist').innerHTML = '<li>scan timed out, try again</li>';
 };
 $('scanlist').onclick = e => { if (e.target.dataset.ssid) { $('w_ssid').value = e.target.dataset.ssid; $('w_pass').value = ''; $('w_pass').placeholder = 'password'; $('w_pass').focus(); } };
 

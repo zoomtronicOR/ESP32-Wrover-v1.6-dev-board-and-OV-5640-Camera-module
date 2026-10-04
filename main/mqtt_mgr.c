@@ -15,6 +15,7 @@
 #include "event_mgr.h"
 #include "motion_mgr.h"
 #include "person_mgr.h"
+#include "sd_mgr.h"
 #include "mqtt_client.h"
 #include "nvs.h"
 #include "sysmon.h"
@@ -370,6 +371,10 @@ static void publish_discovery(void)
     cJSON_AddStringToObject(psw, "icon", "mdi:account-search");
     announce("switch", "person_detection", psw);
 
+    if (sd_mgr_supported()) {
+        add_sensor("sd_state", "SD card", "{{ value_json.sd }}", NULL, NULL, true);
+        add_sensor("sd_free", "SD free", "{{ value_json.sd_free_mb }}", "MB", "data_size", true);
+    }
     add_sensor("line_in_today", "Line in today", "{{ value_json.line_in }}", NULL, NULL, false);
     add_sensor("line_out_today", "Line out today", "{{ value_json.line_out }}", NULL, NULL, false);
 
@@ -453,6 +458,10 @@ static void publish_telemetry(void)
     cJSON_AddNumberToObject(o, "line_in", lin);
     cJSON_AddNumberToObject(o, "line_out", lout);
     cJSON_AddStringToObject(o, "ai_state", ai_mgr_state());
+    cJSON_AddStringToObject(o, "sd", sd_mgr_state());
+    cJSON *sd = sd_mgr_state_json();
+    cJSON_AddNumberToObject(o, "sd_free_mb", cJSON_GetObjectItem(sd, "free_mb")->valuedouble);
+    cJSON_Delete(sd);
     cJSON_AddStringToObject(o, "last_object", ai_mgr_last_object()[0] ? ai_mgr_last_object() : "none");
     char url[48];
     snprintf(url, sizeof(url), "http://%s:81/stream", w.ip);

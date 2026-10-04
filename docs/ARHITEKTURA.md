@@ -36,6 +36,7 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Podržane su dve
 | `ai_mgr.c` | Eksterni AI: POST JPEG-a na server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom |
 | `llm_mgr.c` | Opis događaja vision LLM-om (Ollama `/api/chat` ili OpenAI-kompatibilni API), cooldown, bez gomilanja zahteva |
 | `stats_mgr.c` | Statistika: 24 satna bucket-a u RAM-u, brojači iz događaja i uzorci zdravlja na 10 s; sati po uptime-u dok se ne podesi sat |
+| `sd_mgr.c` | microSD (samo ESP32-CAM, SDMMC 1-bit): montiranje kad je kartica u slotu, upis slika događaja iz zasebnog task-a, timelapse preko frame huba, brisanje najstarijih dana, ZIP folder u hodu |
 | `sysmon.c` | Opterećenje CPU-a po jezgru, heap/PSRAM/DMA (ukupno, slobodno, minimum), veličina firmware-a, lista taskova, telemetrija modula |
 | `status_led.c` | Statusni LED (GPIO 2) |
 | `console_cmds.c` | Serijska konzola (UART, 115200) |

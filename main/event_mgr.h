@@ -30,6 +30,9 @@ typedef enum {
     EV_OTA_FINISHED,     // value 1 = ok, 2 = rollback, 0 = failed (detail = reason)
     EV_TAMPER,           // detail = covered / moved, value = edge or mismatch %
     EV_TAMPER_CLEARED,   // detail = restored / new view accepted
+    EV_SD_INSERTED,      // value = card size MB, detail = card name
+    EV_SD_REMOVED,       // detail = reason
+    EV_TIMELAPSE_DONE,   // value = frames today, detail = folder
     EV_TYPE_COUNT
 } event_type_t;
 
