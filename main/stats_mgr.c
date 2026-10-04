@@ -31,6 +31,7 @@ typedef struct {
 } bucket_t;
 
 static bucket_t s_b[HOURS];
+static bucket_t s_tmp[HOURS];  // re-keying scratch; too big for the task stack
 static char s_labels[LABELS_MAX][LABEL_LEN];  // AI labels in order of first appearance
 static int s_nlabels;
 static bool s_wall;  // buckets are keyed by wall-clock hours
@@ -74,8 +75,8 @@ static int32_t current_key(void)
         return (int32_t)(up_s / 3600);
     }
     if (!s_wall) {
-        bucket_t old[HOURS];
-        memcpy(old, s_b, sizeof(old));
+        bucket_t *old = s_tmp;
+        memcpy(old, s_b, sizeof(s_b));
         for (int i = 0; i < HOURS; i++) {
             s_b[i].key = -1;
         }
@@ -179,7 +180,7 @@ esp_err_t stats_mgr_init(void)
         s_b[i].key = -1;
     }
     event_add_listener(on_event);
-    xTaskCreate(stats_task, "stats", 3072, NULL, 2, NULL);
+    xTaskCreate(stats_task, "stats", 4096, NULL, 2, NULL);
     return ESP_OK;
 }
 
