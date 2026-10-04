@@ -39,6 +39,16 @@ static bool s_time_synced;
 static const char *s_time_source = "none";
 static char s_ap_ssid[33];
 
+// Background scan: the radio hops channels while scanning, so a phone on the setup AP loses
+// the link for a moment and a blocking HTTP request fails. The API only starts the scan; the
+// result is kept here for the page to fetch once the link is back.
+#define SCAN_MAX 20
+static wifi_ap_record_t s_scan_recs[SCAN_MAX];
+static uint16_t s_scan_n;
+static volatile bool s_scanning;
+static int64_t s_scan_done_us;
+static portMUX_TYPE s_scan_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static void apply_sta_config(void)
 {
     wifi_config_t wc = {0};
@@ -92,6 +102,10 @@ static void sta_connect(void)
 
 static void reconnect_cb(void *arg)
 {
+    if (s_scanning) {  // a connect attempt would abort the scan; try again shortly
+        esp_timer_start_once(s_reconnect_timer, 3000 * 1000);
+        return;
+    }
     sta_connect();
 }
 
@@ -113,6 +127,25 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     case WIFI_EVENT_STA_START:
         sta_connect();
         break;
+    case WIFI_EVENT_SCAN_DONE: {
+        wifi_ap_record_t *tmp = calloc(SCAN_MAX, sizeof(*tmp));
+        uint16_t n = SCAN_MAX;
+        if (!tmp || esp_wifi_scan_get_ap_records(&n, tmp) != ESP_OK) {
+            n = 0;
+            esp_wifi_clear_ap_list();
+        }
+        taskENTER_CRITICAL(&s_scan_mux);
+        if (tmp) {
+            memcpy(s_scan_recs, tmp, n * sizeof(*tmp));
+        }
+        s_scan_n = n;
+        s_scan_done_us = esp_timer_get_time();
+        s_scanning = false;
+        taskEXIT_CRITICAL(&s_scan_mux);
+        free(tmp);
+        ESP_LOGI(TAG, "scan done: %u network(s)", n);
+        break;
+    }
     case WIFI_EVENT_STA_DISCONNECTED: {
         wifi_event_sta_disconnected_t *d = data;
         bool was_connected = s_sta_connected;
@@ -325,33 +358,53 @@ static const char *auth_name(wifi_auth_mode_t m)
     }
 }
 
-cJSON *wifi_mgr_scan(void)
+esp_err_t wifi_mgr_scan_start(void)
 {
-    cJSON *arr = cJSON_CreateArray();
-    wifi_scan_config_t sc = {.show_hidden = false};
-    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    if (s_scanning) {
+        return ESP_OK;
+    }
+    // Short dwell per channel keeps the setup AP's own channel away only briefly.
+    wifi_scan_config_t sc = {.show_hidden = false, .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+                             .scan_time.active = {.min = 30, .max = 80}};
+    s_scanning = true;
+    esp_err_t err = esp_wifi_scan_start(&sc, false);
     if (err != ESP_OK) {
+        s_scanning = false;
         ESP_LOGW(TAG, "scan failed: %s", esp_err_to_name(err));
-        return arr;
     }
-    uint16_t n = 20;
-    wifi_ap_record_t *recs = calloc(n, sizeof(*recs));
-    if (!recs) {
-        esp_wifi_clear_ap_list();
-        return arr;
+    return err;
+}
+
+cJSON *wifi_mgr_scan_json(void)
+{
+    wifi_ap_record_t *recs = calloc(SCAN_MAX, sizeof(*recs));
+    uint16_t n = 0;
+    bool running;
+    int64_t done_us;
+    taskENTER_CRITICAL(&s_scan_mux);
+    running = s_scanning;
+    done_us = s_scan_done_us;
+    if (recs) {
+        n = s_scan_n;
+        memcpy(recs, s_scan_recs, n * sizeof(*recs));
     }
-    esp_wifi_scan_get_ap_records(&n, recs);
+    taskEXIT_CRITICAL(&s_scan_mux);
+
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "state", running ? "running" : done_us ? "done" : "idle");
+    cJSON_AddNumberToObject(o, "age_s", done_us ? (int)((esp_timer_get_time() - done_us) / 1000000) : -1);
+    cJSON *arr = cJSON_AddArrayToObject(o, "networks");
     for (int i = 0; i < n; i++) {
-        cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "ssid", (const char *)recs[i].ssid);
-        cJSON_AddNumberToObject(o, "rssi", recs[i].rssi);
-        cJSON_AddNumberToObject(o, "channel", recs[i].primary);
-        cJSON_AddStringToObject(o, "auth", auth_name(recs[i].authmode));
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "ssid", (const char *)recs[i].ssid);
+        cJSON_AddNumberToObject(r, "rssi", recs[i].rssi);
+        cJSON_AddNumberToObject(r, "channel", recs[i].primary);
+        cJSON_AddStringToObject(r, "auth", auth_name(recs[i].authmode));
         char bssid[18];
         snprintf(bssid, sizeof(bssid), MACSTR, MAC2STR(recs[i].bssid));
-        cJSON_AddStringToObject(o, "bssid", bssid);
-        cJSON_AddItemToArray(arr, o);
+        cJSON_AddStringToObject(r, "bssid", bssid);
+        cJSON_AddItemToArray(arr, r);
     }
     free(recs);
-    return arr;
+    return o;
 }

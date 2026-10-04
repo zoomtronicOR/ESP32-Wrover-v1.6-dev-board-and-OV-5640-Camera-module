@@ -23,7 +23,9 @@ esp_err_t wifi_mgr_init(void);
 void wifi_mgr_get_status(wifi_status_t *out);
 // Stores new credentials (Save → NVS) and reconnects.
 esp_err_t wifi_mgr_set_credentials(const char *ssid, const char *pass, const char *hostname);
-// Blocking scan; returns a JSON array of networks.
-cJSON *wifi_mgr_scan(void);
+// Starts a background scan (no-op while one is running).
+esp_err_t wifi_mgr_scan_start(void);
+// {"state":"idle"|"running"|"done","age_s","networks":[{ssid,rssi,channel,auth,bssid}]}
+cJSON *wifi_mgr_scan_json(void);
 // Manual time fallback (spec §55): used only while NTP has not synchronised.
 esp_err_t wifi_mgr_set_time_manual(int64_t epoch);
