@@ -118,6 +118,7 @@ Zaštita je uključena od prvog pokretanja. Dok je inicijalna lozinka aktivna, w
 | GET | `/api/sd/files?path=X[&dl=1]` | Fajl sa kartice (`dl=1` = preuzimanje) |
 | GET | `/api/sd/files?zip=X` | Ceo folder kao ZIP |
 | POST | `/api/sd/action` | `{"action": "tl_start" \| "tl_stop" \| "eject" \| "mount" \| "format"}` |
+| GET | `/api/coredump` | Core dump poslednjeg pada (ELF, za `esp-coredump info_corefile`) |
 | GET/POST | `/api/system` | Informacije o sistemu i lista taskova; POST `{"device_name"}` |
 | POST | `/api/time` | `{"epoch": <unix s>}`: postavlja vreme iz browsera ako NTP ne radi |
 | POST | `/api/login`, `/api/logout` | Prijava (session cookie) / odjava |
@@ -362,6 +363,7 @@ automation:
 - **microSD:** WROVER ploča nema slot (GPIO 4 je kamera); microSD radi samo na ESP32-CAM-u. Firmware za ESP32-CAM zauzima oko 96 % OTA slota.
 - **ESP32-CAM:** treba mu stabilno eksterno napajanje od 5 V, a za flešovanje preko USB-a IO0 + RST (vidi [Ploča 2](#ploča-2-ai-thinker-esp32-cam--ov2640)).
 - **Napajanje WROVER-a:** na slabom USB napajanju ploča posle uključivanja ponekad ne krene dok se ne pritisne RST. Snimljeni logovi pokazuju dva slučaja: brownout petlju u trenutku pokretanja Wi-Fi-ja (strujni vrhovi 400–500 mA) i čip koji uopšte ne krene (spor porast napona / EN). Firmware smanjuje opterećenje (senzor u standby-ju dok se pali Wi-Fi), a pravo rešenje je hardversko: jače napajanje od 5 V i kratak kabl, 470–1000 µF na 5V i 1–10 µF na EN pinu.
+- **Interni RAM:** Wi-Fi/TCP baferi i stekovi taskova dele oko 300 KB internog RAM-a. Kad slobodnog padne ispod 20 KB, lokalna detekcija osobe i slanje slika na MQTT se pauziraju; ako ostane ispod 12 KB 15 s, uređaj se sam restartuje (razlog „low memory (self-restart)“) umesto da ostane nedostupan. Na ESP32-CAM-u sa svim detekcijama uključenim preporučena rezolucija je do 1024×768.
 - **OV5640 do 2048×1536:** na ESP32 sa 4 MB PSRAM-a veće rezolucije povremeno ne isporuče frejm, a puni 5 MP (2592×1944) ne radi ni na jednom XCLK taktu. Detalji u sekciji [Modul kamere](#modul-kamere).
 - **Autofokus (OV5640):** drajver esp32-camera odustaje od AF komandi posle 2 s, a senzoru treba ~4 s; firmware zato šalje AF komande sam. Radi samo na modulima sa motorom za fokus.
 

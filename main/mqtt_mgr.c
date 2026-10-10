@@ -509,8 +509,8 @@ void mqtt_mgr_publish_state(const char *leaf, const char *payload, bool retain)
 
 void mqtt_mgr_publish_snapshot(cam_frame_t *f)
 {
-    if (strcmp(s_state, "ok") != 0 || !f) {
-        return;
+    if (strcmp(s_state, "ok") != 0 || !f || sysmon_memory_tight()) {
+        return;  // internal RAM low: skip the picture, the event itself still goes out (spec §40)
     }
     cam_mgr_frame_ref(f);
     post_cmd((cmd_t){.type = CMD_FRAME, .frame = f});

@@ -3,6 +3,7 @@
 #include "sysmon.h"
 #include "app_config.h"
 #include "esp_app_desc.h"
+#include "esp_attr.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
@@ -23,6 +24,17 @@
 static const char *TAG = "sysmon";
 
 #define LOW_HEAP_WARN_BYTES (30 * 1024)
+// Below this much free internal RAM optional work pauses (spec §40); below the critical level
+// for CRITICAL_SECONDS the device restarts itself. Without internal RAM Wi-Fi/lwIP cannot get
+// buffers: the board stays "alive" but unreachable and ignores even the HA reboot command,
+// which on the ESP32-CAM only a power cycle cured.
+#define TIGHT_HEAP_BYTES    (20 * 1024)
+#define CRITICAL_HEAP_BYTES (12 * 1024)
+#define CRITICAL_SECONDS    15
+#define LOWMEM_MAGIC        0x4C4F4D45u  // "LOME": the last restart was ours, for low memory
+
+static RTC_NOINIT_ATTR uint32_t s_rtc_restart_magic;
+static volatile bool s_tight;
 
 static float s_cpu_load[2];
 
@@ -31,6 +43,7 @@ static void sysmon_task(void *arg)
     uint32_t prev_idle[2] = {ulTaskGetIdleRunTimeCounterForCore(0), ulTaskGetIdleRunTimeCounterForCore(1)};
     int64_t prev_t = esp_timer_get_time();
     bool low_heap_logged = false;
+    int critical_s = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         int64_t now = esp_timer_get_time();
@@ -51,6 +64,15 @@ static void sysmon_task(void *arg)
             low_heap_logged = true;
         } else if (free_int > LOW_HEAP_WARN_BYTES * 2) {
             low_heap_logged = false;
+        }
+        s_tight = free_int < TIGHT_HEAP_BYTES;
+        critical_s = free_int < CRITICAL_HEAP_BYTES ? critical_s + 1 : 0;
+        if (critical_s >= CRITICAL_SECONDS) {
+            ESP_LOGE(TAG, "internal heap below %d bytes for %d s (%u free): restarting",
+                     CRITICAL_HEAP_BYTES, CRITICAL_SECONDS, (unsigned)free_int);
+            s_rtc_restart_magic = LOWMEM_MAGIC;
+            vTaskDelay(pdMS_TO_TICKS(100));
+            esp_restart();
         }
     }
 }
@@ -73,12 +95,22 @@ void sysmon_get(sys_stats_t *out)
     out->uptime_s = esp_timer_get_time() / 1000000;
 }
 
+bool sysmon_memory_tight(void)
+{
+    return s_tight;
+}
+
 const char *sysmon_reset_reason(void)
 {
+    static int lowmem = -1;  // read the RTC marker once, then clear it for the next boot
+    if (lowmem < 0) {
+        lowmem = esp_reset_reason() == ESP_RST_SW && s_rtc_restart_magic == LOWMEM_MAGIC;
+        s_rtc_restart_magic = 0;
+    }
     switch (esp_reset_reason()) {
     case ESP_RST_POWERON: return "power-on";
     case ESP_RST_EXT: return "external";
-    case ESP_RST_SW: return "software";
+    case ESP_RST_SW: return lowmem ? "low memory (self-restart)" : "software";
     case ESP_RST_PANIC: return "panic";
     case ESP_RST_INT_WDT: return "interrupt watchdog";
     case ESP_RST_TASK_WDT: return "task watchdog";

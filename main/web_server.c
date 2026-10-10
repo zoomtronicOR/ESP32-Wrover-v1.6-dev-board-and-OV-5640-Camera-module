@@ -19,6 +19,8 @@
 #include "llm_mgr.h"
 #include "motion_mgr.h"
 #include "backup.h"
+#include "esp_core_dump.h"
+#include "esp_partition.h"
 #include "sd_mgr.h"
 #include "stats_mgr.h"
 #include "person_mgr.h"
@@ -828,6 +830,34 @@ static esp_err_t config_import_post(httpd_req_t *req)
     return send_json(req, r, NULL);
 }
 
+// Raw ELF core dump of the last crash, for `esp-coredump info_corefile` on a PC.
+static esp_err_t coredump_get(httpd_req_t *req)
+{
+    size_t addr = 0, size = 0;
+    if (esp_core_dump_image_get(&addr, &size) != ESP_OK || !size) {
+        return send_result(req, ESP_ERR_NOT_FOUND, "no core dump stored");
+    }
+    const esp_partition_t *p = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+    uint8_t *buf = malloc(4096);
+    if (!p || !buf) {
+        free(buf);
+        return send_result(req, ESP_FAIL, "core dump partition not readable");
+    }
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"coredump.bin\"");
+    esp_err_t e = ESP_OK;
+    for (size_t off = 0; off < size && e == ESP_OK; off += 4096) {
+        size_t n = size - off < 4096 ? size - off : 4096;
+        e = esp_partition_read(p, addr - p->address + off, buf, n);
+        if (e == ESP_OK) {
+            e = httpd_resp_send_chunk(req, (const char *)buf, n);
+        }
+    }
+    free(buf);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return e;
+}
+
 static esp_err_t stats_get(httpd_req_t *req)
 {
     return send_json(req, stats_mgr_json(), NULL);
@@ -1187,6 +1217,7 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/sd/action", HTTP_POST, sd_action_post);
     reg(s_api, "/api/config/export", HTTP_GET, config_export_get);
     reg(s_api, "/api/config/import", HTTP_POST, config_import_post);
+    reg(s_api, "/api/coredump", HTTP_GET, coredump_get);
     reg(s_api, "/api/stats", HTTP_GET, stats_get);
     reg(s_api, "/api/stats/reset", HTTP_POST, stats_reset_post);
     reg(s_api, "/api/ai", HTTP_GET, ai_get);

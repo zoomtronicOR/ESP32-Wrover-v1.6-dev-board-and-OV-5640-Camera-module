@@ -22,6 +22,7 @@ extern "C" {
 #include "event_mgr.h"
 #include "motion_mgr.h"
 #include "mqtt_mgr.h"
+#include "sysmon.h"
 }
 
 static const char *TAG = "person";
@@ -398,6 +399,11 @@ void person_task(void *)
             continue;
         }
 
+        if (sysmon_memory_tight()) {
+            s_state = "paused (low memory)";  // spec §40: optional AI work yields first
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
         int64_t t0 = esp_timer_get_time();
         cam_frame_t *f = cam_mgr_snapshot(pdMS_TO_TICKS(3000));
         if (!f) {
@@ -446,7 +452,7 @@ esp_err_t person_mgr_init(void)
         strlcpy(s_last_error, "model initialisation failed", sizeof(s_last_error));
     }
     // Interpreter Invoke() needs a deep stack; pinned to core 1 next to motion analysis.
-    xTaskCreatePinnedToCore(person_task, "person", 8192, NULL, 3, NULL, 1);
+    xTaskCreatePinnedToCore(person_task, "person", 4096, NULL, 3, NULL, 1);  // <1 KB used (measured); arena is in PSRAM
     ESP_LOGI(TAG, "on-device person detection %s", s_cfg.enabled ? "enabled" : "disabled");
     return err;
 }

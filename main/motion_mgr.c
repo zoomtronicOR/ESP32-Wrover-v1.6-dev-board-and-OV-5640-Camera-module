@@ -857,7 +857,7 @@ esp_err_t motion_mgr_init(void)
         ESP_LOGE(TAG, "no PSRAM for motion buffers");
         return ESP_ERR_NO_MEM;
     }
-    xTaskCreatePinnedToCore(motion_task, "motion", 6144, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(motion_task, "motion", 5120, NULL, 4, NULL, 1);  // ~1.2 KB used (measured)
     ESP_LOGI(TAG, "motion detection %s, %d zone(s)", s_cfg.enabled ? "enabled" : "disabled", s_cfg.nzones);
     return ESP_OK;
 }

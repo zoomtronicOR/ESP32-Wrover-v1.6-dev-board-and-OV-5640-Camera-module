@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "cJSON.h"
 
@@ -17,6 +18,8 @@ typedef struct {
 void sysmon_init(void);
 void sysmon_get(sys_stats_t *out);
 const char *sysmon_reset_reason(void);
+// True while free internal RAM is low: optional work (person detection, MQTT snapshots) pauses.
+bool sysmon_memory_tight(void);
 // Static device/firmware facts plus live memory figures (System tab, spec §25).
 cJSON *sysmon_system_json(void);
 cJSON *sysmon_tasks_json(void);

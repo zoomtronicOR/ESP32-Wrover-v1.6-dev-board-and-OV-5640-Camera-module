@@ -44,3 +44,8 @@ CONFIG_CAMERA_AF_SUPPORT=y
 
 # IRAM is tight on rev1 (PSRAM cache workaround); keep Wi-Fi TX fast path, move RX to flash
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+
+# Wi-Fi TX buffers come from internal RAM: 32 in flight (1.6 KB each) during an MJPEG stream or a
+# large MQTT snapshot drained the ESP32-CAM to ~10 KB and the network stack stalled. 16 caps the burst.
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+
