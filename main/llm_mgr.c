@@ -469,6 +469,16 @@ static void llm_task(void *arg)
 
 /* ------------------------------------------------------------------ public API ------------ */
 
+// The task (6 KB of internal RAM for its stack) is created on first use: when descriptions are
+// enabled or a test is run.
+static void ensure_task(void)
+{
+    static TaskHandle_t task;
+    if (!task) {
+        xTaskCreatePinnedToCore(llm_task, "llm", 6144, NULL, 2, &task, 1);
+    }
+}
+
 esp_err_t llm_mgr_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
@@ -476,7 +486,9 @@ esp_err_t llm_mgr_init(void)
     load_config();
     s_state = s_cfg.enabled ? "idle" : "off";
     event_add_listener(on_event);
-    xTaskCreatePinnedToCore(llm_task, "llm", 6144, NULL, 2, NULL, 1);
+    if (s_cfg.enabled) {
+        ensure_task();
+    }
     ESP_LOGI(TAG, "AI descriptions %s (%s)", s_cfg.enabled ? "enabled" : "disabled", s_cfg.model[0] ? s_cfg.model : "no model");
     return ESP_OK;
 }
@@ -528,6 +540,9 @@ esp_err_t llm_mgr_set_config(const cJSON *cfg, char *err, size_t err_len)
     s_cfg = n;
     xSemaphoreGive(s_lock);
     s_state = n.enabled ? "idle" : "off";
+    if (n.enabled) {
+        ensure_task();
+    }
     esp_err_t e = save_config(&n);
     if (e != ESP_OK) {
         snprintf(err, err_len, "saving failed: %s", esp_err_to_name(e));
@@ -543,6 +558,7 @@ esp_err_t llm_mgr_test(void)
     if (s_test_running) {
         return ESP_ERR_INVALID_STATE;
     }
+    ensure_task();
     job_t j = {.event_id = 0};
     s_test_running = true;
     s_test_text[0] = 0;

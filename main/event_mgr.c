@@ -3,6 +3,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include "event_mgr.h"
+#include "sdkconfig.h"
 #include "app_config.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -16,9 +17,16 @@
 
 static const char *TAG = "event";
 
+#if CONFIG_FEATURE_EVENT_LOG
 #define EVENTS_MAX     64   // records kept in RAM
 #define SNAPSHOTS_MAX  12   // newest events that keep their JPEG (PSRAM)
 #define SNAPSHOT_BUDGET (1024 * 1024)  // and at most this many bytes: 5 MP frames are ~600 KB each
+#else
+// No Events tab: just enough for the SD card / LLM to fetch the snapshot right after the event.
+#define EVENTS_MAX     8
+#define SNAPSHOTS_MAX  2
+#define SNAPSHOT_BUDGET (512 * 1024)
+#endif
 #define QUEUE_LEN      16
 
 typedef struct {
@@ -60,6 +68,7 @@ static const char *const TYPE_NAMES[EV_TYPE_COUNT] = {
     [EV_LINE_OUT] = "line_out",
     [EV_PERSON_LOCAL] = "person_detected_local",
     [EV_PERSON_LOCAL_LEFT] = "person_left_local",
+    [EV_NIGHT_MODE] = "night_mode",
     [EV_OTA_STARTED] = "ota_started",
     [EV_OTA_FINISHED] = "ota_finished",
     [EV_TAMPER] = "tamper",

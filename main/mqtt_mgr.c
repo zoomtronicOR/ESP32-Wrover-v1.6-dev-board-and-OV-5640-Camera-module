@@ -277,6 +277,14 @@ static void add_button(const char *object, const char *name, const char *payload
     announce("button", object, e);
 }
 
+// Empty retained config: removes an entity announced by an earlier firmware from Home Assistant.
+static void unannounce(const char *component, const char *object)
+{
+    char t[TOPIC_LEN];
+    snprintf(t, sizeof(t), "%s/%s/%s/%s/config", s_cfg.disc_prefix, component, s_dev, object);
+    esp_mqtt_client_publish(s_client, t, "", 0, 1, true);
+}
+
 static void publish_discovery(void)
 {
     char t[TOPIC_LEN];
@@ -353,7 +361,8 @@ static void publish_discovery(void)
     cJSON_AddStringToObject(tp, "json_attributes_topic", t);
     announce("binary_sensor", "tamper", tp);
 
-    // On-device person detection and line crossing.
+#if CONFIG_FEATURE_PERSON
+    // On-device person detection.
     cJSON *pl = entity("person_local", "Person (local)", NULL);
     topic(t, "person_local");
     cJSON_AddStringToObject(pl, "state_topic", t);
@@ -370,14 +379,25 @@ static void publish_discovery(void)
     cJSON_AddStringToObject(psw, "value_template", "{{ 'ON' if value_json.person_local_enabled else 'OFF' }}");
     cJSON_AddStringToObject(psw, "icon", "mdi:account-search");
     announce("switch", "person_detection", psw);
+#else
+    unannounce("binary_sensor", "person_local");
+    unannounce("switch", "person_detection");
+#endif
 
     if (sd_mgr_supported()) {
         add_sensor("sd_state", "SD card", "{{ value_json.sd }}", NULL, NULL, true);
         add_sensor("sd_free", "SD free", "{{ value_json.sd_free_mb }}", "MB", "data_size", true);
     }
+    cJSON *nm = entity("night_mode", "Night mode", NULL);
+    topic(t, "night");
+    cJSON_AddStringToObject(nm, "state_topic", t);
+    cJSON_AddStringToObject(nm, "icon", "mdi:weather-night");
+    announce("binary_sensor", "night_mode", nm);
+    add_sensor("scene_light", "Scene light", "{{ value_json.light }}", NULL, NULL, true);
     add_sensor("line_in_today", "Line in today", "{{ value_json.line_in }}", NULL, NULL, false);
     add_sensor("line_out_today", "Line out today", "{{ value_json.line_out }}", NULL, NULL, false);
 
+#if CONFIG_FEATURE_AI
     // External AI (spec §15): switch, last object and one binary sensor per tracked label.
     cJSON *aisw = entity("ai_detection", "AI detection", "config");
     topic(t, "ai/set");
@@ -388,7 +408,12 @@ static void publish_discovery(void)
     cJSON_AddStringToObject(aisw, "icon", "mdi:robot");
     announce("switch", "ai_detection", aisw);
     add_sensor("last_object", "Last detected object", "{{ value_json.last_object }}", NULL, NULL, false);
+#else
+    unannounce("switch", "ai_detection");
+    unannounce("sensor", "last_object");
+#endif
 
+#if CONFIG_FEATURE_LLM
     // Vision-LLM event description (HA state is limited to 255 characters; full text in attributes).
     cJSON *desc = entity("last_description", "Last description", NULL);
     topic(t, "description");
@@ -397,6 +422,9 @@ static void publish_discovery(void)
     cJSON_AddStringToObject(desc, "json_attributes_topic", t);
     cJSON_AddStringToObject(desc, "icon", "mdi:text-box-search-outline");
     announce("sensor", "last_description", desc);
+#else
+    unannounce("sensor", "last_description");
+#endif
 
     for (int i = 0; i < AI_MAX_LABELS; i++) {
         char object[16], label[16], name[24], tt[TOPIC_LEN];
@@ -456,6 +484,8 @@ static void publish_telemetry(void)
     uint32_t lin, lout;
     motion_mgr_line_counts(&lin, &lout);
     cJSON_AddNumberToObject(o, "line_in", lin);
+    cJSON_AddBoolToObject(o, "night", cam_mgr_night());
+    cJSON_AddNumberToObject(o, "light", cam_mgr_light10());
     cJSON_AddNumberToObject(o, "line_out", lout);
     cJSON_AddStringToObject(o, "ai_state", ai_mgr_state());
     cJSON_AddStringToObject(o, "sd", sd_mgr_state());

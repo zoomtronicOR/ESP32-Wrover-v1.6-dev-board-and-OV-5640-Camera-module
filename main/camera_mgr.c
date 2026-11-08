@@ -10,6 +10,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "event_mgr.h"
+#include "mqtt_mgr.h"
+#include "status_led.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -59,11 +61,13 @@ typedef enum { PT_RANGE, PT_BOOL, PT_ENUM } ptype_t;
 enum {
     P_FRAMESIZE, P_QUALITY, P_FPS_LIMIT, P_STANDBY,
     P_BRIGHTNESS, P_CONTRAST, P_SATURATION, P_SHARPNESS, P_DENOISE, P_SPECIAL_EFFECT,
-    P_HMIRROR, P_VFLIP, P_COLORBAR,
+    P_HMIRROR, P_VFLIP, P_ROTATION, P_COLORBAR,
     P_EXPOSURE_CTRL, P_AEC2, P_AE_LEVEL, P_AEC_VALUE, P_GAIN_CTRL, P_AGC_GAIN, P_GAINCEILING,
     P_WHITEBAL, P_AWB_GAIN, P_WB_MODE,
     P_BPC, P_WPC, P_RAW_GMA, P_LENC, P_DCW,
     P_AF_MODE,
+    P_NIGHT_MODE, P_NIGHT_BELOW, P_DAY_ABOVE, P_NIGHT_GRAY,
+    P_STATUS_LED, P_FLASH_LED,
     P_SENSOR, P_XCLK, P_FB_COUNT, P_GRAB_LATEST,
     P_COUNT
 };
@@ -121,10 +125,23 @@ static int ap_gainceiling(sensor_t *s, int v)
 
 static int ap_af_mode(sensor_t *s, int v);
 
+static bool s_night;            // night profile applied (spec §31)
+static int s_light10 = -1;      // smoothed scene light (x10), -1 = unknown (e.g. after standby)
+static int64_t s_dn_since_us;   // since when the opposite day/night condition holds
+static int64_t s_dn_tick_us;
+static void night_apply(sensor_t *s, bool on);
+
+static void leds_apply(void);
+
 static const char *const OPT_EFFECT[] = {"None", "Negative", "Grayscale", "Red tint", "Green tint", "Blue tint", "Sepia"};
 static const char *const OPT_WB[] = {"Auto", "Sunny", "Cloudy", "Office", "Home"};
 static const char *const OPT_GAINCEIL[] = {"2x", "4x", "8x", "16x", "32x", "64x", "128x"};
 static const char *const OPT_AF[] = {"Off", "Continuous", "Single (trigger)"};
+static const char *const OPT_ROTATION[] = {"0\xc2\xb0", "90\xc2\xb0", "180\xc2\xb0", "270\xc2\xb0"};
+static const char *const OPT_NIGHT[] = {"Off (day)", "On (night)", "Auto"};
+enum { NIGHT_OFF, NIGHT_ON, NIGHT_AUTO };
+static const char *const OPT_FLASH[] = {"Off", "On", "At night"};
+enum { FLASH_OFF, FLASH_ON, FLASH_NIGHT };
 static const char *const OPT_SENSOR[] = {"Auto (board default)", "OV5640 (up to 2048x1536)", "OV2640 (up to 1600x1200)"};
 
 static const param_def_t PARAMS[P_COUNT] = {
@@ -140,6 +157,7 @@ static const param_def_t PARAMS[P_COUNT] = {
     [P_SPECIAL_EFFECT] = {"special_effect", "Special effect", "image", PT_ENUM, 0, 6, 0, OPT_EFFECT, ap_special_effect, 0},
     [P_HMIRROR]        = {"hmirror", "Horizontal mirror", "image", PT_BOOL, 0, 1, 0, NULL, ap_hmirror, 0},
     [P_VFLIP]          = {"vflip", "Vertical flip", "image", PT_BOOL, 0, 1, 0, NULL, ap_vflip, 0},
+    [P_ROTATION]       = {"rotation", "Rotate image (clockwise)", "image", PT_ENUM, 0, 3, 0, OPT_ROTATION, NULL, F_LOCAL},
     [P_COLORBAR]       = {"colorbar", "Test colorbar", "image", PT_BOOL, 0, 1, 0, NULL, ap_colorbar, 0},
     [P_EXPOSURE_CTRL]  = {"exposure_ctrl", "Auto exposure (AEC)", "exposure", PT_BOOL, 0, 1, 1, NULL, ap_exposure_ctrl, 0},
     [P_AEC2]           = {"aec2", "AEC DSP", "exposure", PT_BOOL, 0, 1, 0, NULL, ap_aec2, 0},
@@ -157,6 +175,13 @@ static const param_def_t PARAMS[P_COUNT] = {
     [P_LENC]           = {"lenc", "Lens correction", "dsp", PT_BOOL, 0, 1, 1, NULL, ap_lenc, 0},
     [P_DCW]            = {"dcw", "Downsize (DCW)", "dsp", PT_BOOL, 0, 1, 1, NULL, ap_dcw, 0},
     [P_AF_MODE]        = {"af_mode", "Autofocus", "focus", PT_ENUM, 0, 2, 0, OPT_AF, ap_af_mode, 0},
+    [P_NIGHT_MODE]     = {"night_mode", "Night mode", "night", PT_ENUM, 0, 2, NIGHT_OFF, OPT_NIGHT, NULL, F_LOCAL},
+    // Defaults measured on the OV2640 (room lit ~535, lights off ~130); the OV5640 overrides them.
+    [P_NIGHT_BELOW]    = {"night_below", "Night when light below", "night", PT_RANGE, 1, 2000, 200, NULL, NULL, F_LOCAL},
+    [P_DAY_ABOVE]      = {"day_above", "Day when light above", "night", PT_RANGE, 2, 5000, 400, NULL, NULL, F_LOCAL},
+    [P_NIGHT_GRAY]     = {"night_gray", "Black & white at night", "night", PT_BOOL, 0, 1, 1, NULL, NULL, F_LOCAL},
+    [P_STATUS_LED]     = {"status_led", "Status LED", "led", PT_BOOL, 0, 1, 1, NULL, NULL, F_LOCAL},
+    [P_FLASH_LED]      = {"flash_led", "White flash LED", "led", PT_ENUM, 0, 2, FLASH_OFF, OPT_FLASH, NULL, F_LOCAL},
     [P_SENSOR]         = {"sensor", "Camera module", "module", PT_ENUM, 0, 2, SENSOR_AUTO, OPT_SENSOR, NULL, F_INIT},
     [P_XCLK]           = {"xclk_mhz", "XCLK (MHz)", "init", PT_RANGE, 6, 24, CONFIG_CAM_XCLK_MHZ_DEFAULT, NULL, NULL, F_INIT},
     [P_FB_COUNT]       = {"fb_count", "Frame buffers", "init", PT_RANGE, 1, 3, 2, NULL, NULL, F_INIT},
@@ -295,6 +320,8 @@ static void adapt_to_sensor(sensor_t *s)
         s_max[P_GAINCEILING] = 1023;
         // Default chosen on this installation (user preference): ~12.5x, less noise than the full range.
         s_def[P_GAINCEILING] = 200;
+        s_def[P_NIGHT_BELOW] = 5;   // light_index 0.5
+        s_def[P_DAY_ABOVE] = 15;    // light_index 1.5
     }
     // Values outside this sensor's range (e.g. a generic default, or a value saved for another
     // sensor) fall back to the sensor default rather than being clamped to an edge of the range.
@@ -445,6 +472,13 @@ static void apply_all(sensor_t *s)
             }
         }
     }
+    if (s_night) {
+        night_apply(s, true);  // driver restart or defaults: keep the night profile
+    }
+#if !CONFIG_CAM_BOARD_AI_THINKER
+    s_supported[P_FLASH_LED] = false;  // only the ESP32-CAM has the white flash LED
+#endif
+    leds_apply();
 }
 
 // Module the user selected, or the board's usual one.
@@ -599,10 +633,31 @@ static cam_frame_t *slot_take(size_t len)
     return NULL;  // all slots held by slow readers: drop this frame
 }
 
+// EXIF APP1 segment with only the Orientation tag (big endian): browsers and Home Assistant
+// rotate the image by it, so 90/270 degree mounting needs no JPEG re-encode on the ESP32.
+// Orientation values for 0/90/180/270 degrees clockwise: 1, 6, 3, 8.
+static const uint8_t EXIF_ORIENT[4] = {1, 6, 3, 8};
+#define EXIF_LEN 36
+static void exif_write(uint8_t *p, int rot)
+{
+    static const uint8_t app1[EXIF_LEN] = {
+        0xFF, 0xE1, 0x00, 0x22, 'E', 'x', 'i', 'f', 0, 0,  // APP1, length 34, "Exif\0\0"
+        'M', 'M', 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08,      // TIFF header, IFD0 at 8
+        0x00, 0x01,                                        // 1 entry
+        0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01,    // Orientation, SHORT, count 1
+        0x00, 0x01, 0x00, 0x00,                            // value (patched below)
+        0x00, 0x00, 0x00, 0x00,                            // no next IFD
+    };
+    memcpy(p, app1, EXIF_LEN);
+    p[29] = EXIF_ORIENT[rot & 3];
+}
+
 static void hub_publish(const camera_fb_t *fb)
 {
+    int rot = s_val[P_ROTATION];
+    size_t extra = (rot && fb->len > 2 && fb->buf[0] == 0xFF && fb->buf[1] == 0xD8) ? EXIF_LEN : 0;
     xSemaphoreTake(s_hub_lock, portMAX_DELAY);
-    cam_frame_t *f = slot_take(fb->len);
+    cam_frame_t *f = slot_take(fb->len + extra);
     if (!f) {
         xSemaphoreGive(s_hub_lock);
         return;
@@ -610,8 +665,15 @@ static void hub_publish(const camera_fb_t *fb)
     f->refs = 1;  // the hub's own reference
     xSemaphoreGive(s_hub_lock);
 
-    memcpy(f->buf, fb->buf, fb->len);
-    f->len = fb->len;
+    if (extra) {
+        f->buf[0] = 0xFF;
+        f->buf[1] = 0xD8;  // SOI, then the orientation segment, then the rest of the JPEG
+        exif_write(f->buf + 2, rot);
+        memcpy(f->buf + 2 + EXIF_LEN, fb->buf + 2, fb->len - 2);
+    } else {
+        memcpy(f->buf, fb->buf, fb->len);
+    }
+    f->len = fb->len + extra;
     f->width = fb->width;
     f->height = fb->height;
     f->timestamp_us = esp_timer_get_time();
@@ -697,6 +759,8 @@ void cam_mgr_consumer_remove(void)
 
 /* ------------------------------------------------------------------ capture task ---------- */
 
+static void night_tick(sensor_t *s, int64_t now);
+
 static void capture_task(void *arg)
 {
     int fails = 0;
@@ -717,6 +781,7 @@ static void capture_task(void *arg)
             if (s_ok && !s_standby && s_val[P_STANDBY] && esp_timer_get_time() - idle_since > STANDBY_AFTER_US) {
                 xSemaphoreTake(s_drv_lock, portMAX_DELAY);
                 sensor_standby(true);
+                s_light10 = -1;  // re-measure right after the next wake-up
                 xSemaphoreGive(s_drv_lock);
             }
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
@@ -766,6 +831,7 @@ static void capture_task(void *arg)
         }
         fails = 0;
         hub_publish(fb);
+        night_tick(esp_camera_sensor_get(), esp_timer_get_time());
         s_last_len = fb->len;
         s_last_w = fb->width;
         s_last_h = fb->height;
@@ -955,6 +1021,16 @@ int cam_mgr_apply_json(const cJSON *obj, char *err, size_t err_len)
         }
         if (PARAMS[i].flags & F_LOCAL) {
             s_val[i] = v;
+            if (i == P_STATUS_LED || i == P_FLASH_LED) {
+                leds_apply();
+            }
+            if (s && (i == P_NIGHT_MODE || i == P_NIGHT_GRAY)) {
+                if (i == P_NIGHT_GRAY && s_night) {
+                    night_apply(s, true);
+                }
+                s_dn_tick_us = 0;
+                night_tick(s, esp_timer_get_time());
+            }
             continue;
         }
         if (!s || !s_supported[i]) {
@@ -1041,6 +1117,118 @@ static int reg16(sensor_t *s, int reg)
     return (hi < 0 || lo < 0) ? -1 : (hi << 8) | lo;
 }
 
+/* ------------------------------------------------------------------ day / night ----------- */
+
+// Scene light independent of the auto exposure: average luma divided by exposure x gain, read
+// from the sensor (spec §31). x10 integer units; -1 when the sensor cannot be read.
+static int sensor_light10(sensor_t *s)
+{
+    if (s_pid == OV5640_PID) {
+        int e0 = reg8(s, 0x3500), e1 = reg8(s, 0x3501), e2 = reg8(s, 0x3502);
+        int gain = reg16(s, 0x350A), avg = reg8(s, 0x56A1);
+        int lines = (e0 < 0 || e1 < 0 || e2 < 0) ? 0 : ((e0 & 0x0F) << 12 | e1 << 4 | e2 >> 4);
+        if (lines <= 0 || gain <= 0 || avg < 0) {
+            return -1;
+        }
+        return (int)(avg * 160000.0 / (lines * (gain & 0x3FF)));  // = telemetry light_index x 10
+    }
+    if (s_pid == OV2640_PID) {
+        // Sensor bank (0x100 | reg): YAVG 0x2F, exposure AEC[15:10] 0x45, [9:2] 0x10, [1:0] 0x04, gain 0x00.
+        int yavg = reg8(s, 0x12F), g = reg8(s, 0x100), a10 = reg8(s, 0x110), a04 = reg8(s, 0x104), a45 = reg8(s, 0x145);
+        if (yavg < 0 || g < 0 || a10 < 0 || a04 < 0 || a45 < 0) {
+            return -1;
+        }
+        int aec = ((a45 & 0x3F) << 10) | (a10 << 2) | (a04 & 0x03);
+        float gain = (1 + ((g >> 4) & 1)) * (1 + ((g >> 5) & 1)) * (1 + ((g >> 6) & 1)) * (1 + ((g >> 7) & 1)) * (1 + (g & 0x0F) / 16.0f);
+        return aec > 0 ? (int)(yavg * 100000.0f / (aec * gain)) : -1;
+    }
+    return -1;
+}
+
+
+// Night profile on top of the user's settings (which stay untouched in s_val): grayscale, the
+// highest gain ceiling, and on the OV5640 its automatic night mode (longer exposure).
+static void night_apply(sensor_t *s, bool on)
+{
+    if (s_supported[P_SPECIAL_EFFECT]) {
+        ap_special_effect(s, on && s_val[P_NIGHT_GRAY] ? 2 : s_val[P_SPECIAL_EFFECT]);
+    }
+    if (s_supported[P_GAINCEILING]) {
+        ap_gainceiling(s, on ? s_max[P_GAINCEILING] : s_val[P_GAINCEILING]);
+    }
+    if (s_pid == OV5640_PID && s->set_reg) {
+        s->set_reg(s, 0x3A00, 0x04, on ? 0x04 : 0);
+    }
+}
+
+// Board LEDs (Camera tab "LEDs"): status LED on/off, white flash LED off / on / with night mode.
+static void leds_apply(void)
+{
+    status_led_enable(s_val[P_STATUS_LED]);
+    status_led_flash(s_val[P_FLASH_LED] == FLASH_ON || (s_val[P_FLASH_LED] == FLASH_NIGHT && s_night));
+}
+
+// Caller holds s_drv_lock.
+static void night_set(sensor_t *s, bool on)
+{
+    if (s_night == on) {
+        return;
+    }
+    s_night = on;
+    s_dn_since_us = 0;
+    night_apply(s, on);
+    leds_apply();
+    ESP_LOGI(TAG, "%s mode (light %d)", on ? "night" : "day", s_light10);
+    event_post(EV_NIGHT_MODE, NULL, s_light10, on ? "night" : "day", NULL);
+    mqtt_mgr_publish_state("night", on ? "ON" : "OFF", true);
+}
+
+// Called while frames flow; caller holds s_drv_lock. Hysteresis: night after 30 s below the
+// night threshold, day after 60 s above the day threshold; the first reading after a wake-up
+// decides at once.
+static void night_tick(sensor_t *s, int64_t now)
+{
+    if (s_val[P_NIGHT_MODE] != NIGHT_AUTO) {
+        night_set(s, s_val[P_NIGHT_MODE] == NIGHT_ON);
+        return;
+    }
+    if (now - s_dn_tick_us < 2000000) {
+        return;
+    }
+    s_dn_tick_us = now;
+    int l = sensor_light10(s);
+    if (l < 0) {
+        return;
+    }
+    bool first = s_light10 < 0;
+    s_light10 = first ? l : (s_light10 * 7 + l * 3) / 10;
+    bool want = s_night ? s_light10 <= s_val[P_DAY_ABOVE] : s_light10 < s_val[P_NIGHT_BELOW];
+    if (first) {
+        night_set(s, want);
+    } else if (want == s_night) {
+        s_dn_since_us = 0;
+    } else if (!s_dn_since_us) {
+        s_dn_since_us = now;
+    } else if (now - s_dn_since_us > (s_night ? 60 : 30) * 1000000LL) {
+        night_set(s, want);
+    }
+}
+
+bool cam_mgr_night(void)
+{
+    return s_night;
+}
+
+int cam_mgr_light10(void)
+{
+    return s_light10;
+}
+
+int cam_mgr_rotation(void)
+{
+    return s_val[P_ROTATION];
+}
+
 // Live sensor state read back from OV5640 registers (exposure, gain, AWB, luminance...).
 static void add_ov5640_registers(sensor_t *s, cJSON *o)
 {
@@ -1115,6 +1303,8 @@ cJSON *cam_mgr_telemetry_json(void)
     cJSON_AddNumberToObject(o, "grab_errors", s_errors);
     cJSON_AddNumberToObject(o, "driver_restarts", s_restarts);
     cJSON_AddNumberToObject(o, "last_frame_bytes", s_last_len);
+    cJSON_AddBoolToObject(o, "night", s_night);
+    cJSON_AddNumberToObject(o, "light", s_light10);
 
     xSemaphoreTake(s_hub_lock, portMAX_DELAY);
     int used = 0;

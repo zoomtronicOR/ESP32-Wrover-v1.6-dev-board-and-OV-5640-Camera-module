@@ -5,3 +5,10 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
 
 # FAT buffers (4 KB per open file, format work buffer) in PSRAM: internal RAM is tight
 CONFIG_FATFS_ALLOC_PREFER_EXTRAM=y
+
+# No TLS client on the 4 MB board: AI server, Ollama and the MQTT broker are on the LAN (plain
+# HTTP / MQTT). Drops the mbedTLS SSL stack from the image (flash) and its RAM at run time.
+CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=n
+CONFIG_MQTT_TRANSPORT_SSL=n
+CONFIG_MQTT_TRANSPORT_WEBSOCKET=n
+CONFIG_MQTT_TRANSPORT_WEBSOCKET_SECURE=n

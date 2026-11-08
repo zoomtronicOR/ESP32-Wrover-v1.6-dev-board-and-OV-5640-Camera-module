@@ -10,6 +10,7 @@
 #include "auth_mgr.h"
 #include "event_mgr.h"
 #include "llm_mgr.h"
+#include "sdkconfig.h"
 #include "motion_mgr.h"
 #include "person_mgr.h"
 #include "mqtt_mgr.h"
@@ -46,8 +47,12 @@ void app_main(void)
     motion_mgr_init();
     person_mgr_init();
     ai_mgr_init();
+#if CONFIG_FEATURE_LLM
     llm_mgr_init();
+#endif
+#if CONFIG_FEATURE_STATS
     stats_mgr_init();
+#endif
     sd_mgr_init();
     web_server_start();
     console_cmds_start();

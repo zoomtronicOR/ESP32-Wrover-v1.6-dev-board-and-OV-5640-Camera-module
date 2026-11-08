@@ -39,8 +39,8 @@ static const char *TAG = "web";
 #define STREAM_IDLE_LIMIT   10   // consecutive 3 s waits without a frame before dropping a client
 #define WS_PUSH_PERIOD_MS   1000
 
-extern const char index_html_start[] asm("_binary_index_html_start");
-extern const char index_html_end[] asm("_binary_index_html_end");
+extern const char index_html_start[] asm("_binary_index_html_gz_start");  // gzip, see main/CMakeLists.txt
+extern const char index_html_end[] asm("_binary_index_html_gz_end");
 
 static httpd_handle_t s_api;
 static httpd_handle_t s_stream;
@@ -183,10 +183,41 @@ cJSON *web_status_json(void)
     cJSON_AddNumberToObject(c, "frame_bytes", cam.last_len);
     cJSON_AddNumberToObject(c, "stream_clients", s_stream_clients);
     cJSON_AddNumberToObject(c, "stream_max", MAX_STREAM_CLIENTS);
+    cJSON_AddNumberToObject(c, "rotation", cam_mgr_rotation());
+    cJSON_AddBoolToObject(c, "night", cam_mgr_night());
+    cJSON_AddNumberToObject(c, "light", cam_mgr_light10());  // same units as night_below / day_above
 
     cJSON_AddItemToObject(o, "motion", motion_mgr_state_json());
     cJSON_AddItemToObject(o, "ai", ai_mgr_state_json());
+#if CONFIG_FEATURE_LLM
     cJSON_AddItemToObject(o, "llm", llm_mgr_state_json());
+#endif
+    cJSON *feat = cJSON_AddObjectToObject(o, "features");
+#ifdef CONFIG_FEATURE_EVENT_LOG
+    cJSON_AddBoolToObject(feat, "events", true);
+#else
+    cJSON_AddBoolToObject(feat, "events", false);
+#endif
+#ifdef CONFIG_FEATURE_AI
+    cJSON_AddBoolToObject(feat, "ai", true);
+#else
+    cJSON_AddBoolToObject(feat, "ai", false);
+#endif
+#ifdef CONFIG_FEATURE_PERSON
+    cJSON_AddBoolToObject(feat, "person", true);
+#else
+    cJSON_AddBoolToObject(feat, "person", false);
+#endif
+#ifdef CONFIG_FEATURE_LLM
+    cJSON_AddBoolToObject(feat, "llm", true);
+#else
+    cJSON_AddBoolToObject(feat, "llm", false);
+#endif
+#ifdef CONFIG_FEATURE_STATS
+    cJSON_AddBoolToObject(feat, "stats", true);
+#else
+    cJSON_AddBoolToObject(feat, "stats", false);
+#endif
     cJSON_AddItemToObject(o, "person", person_mgr_state_json());
 
     // Modules from later phases report their state here once implemented.
@@ -195,7 +226,9 @@ cJSON *web_status_json(void)
     cJSON_AddStringToObject(m, "ha", mqtt_mgr_ha_state());
     cJSON_AddStringToObject(m, "sd", sd_mgr_state());
     cJSON_AddStringToObject(m, "ai", ai_mgr_state());
+#if CONFIG_FEATURE_LLM
     cJSON_AddStringToObject(m, "llm", llm_mgr_state());
+#endif
     cJSON_AddStringToObject(m, "person", person_mgr_state());
     cJSON_AddStringToObject(m, "motion", motion_mgr_active() ? "active" : "idle");
     cJSON_AddStringToObject(m, "ota", "ok");
@@ -459,6 +492,7 @@ static esp_err_t ota_rollback_post(httpd_req_t *req)
 static esp_err_t index_get(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     return httpd_resp_send(req, index_html_start, index_html_end - index_html_start);
 }
@@ -858,6 +892,7 @@ static esp_err_t coredump_get(httpd_req_t *req)
     return e;
 }
 
+#if CONFIG_FEATURE_STATS
 static esp_err_t stats_get(httpd_req_t *req)
 {
     return send_json(req, stats_mgr_json(), NULL);
@@ -868,6 +903,7 @@ static esp_err_t stats_reset_post(httpd_req_t *req)
     stats_mgr_reset();
     return send_result(req, ESP_OK, NULL);
 }
+#endif
 
 static esp_err_t motion_debug_get(httpd_req_t *req)
 {
@@ -900,6 +936,7 @@ static esp_err_t ai_test_post(httpd_req_t *req)
     return send_json(req, ai_mgr_test_json(), NULL);
 }
 
+#if CONFIG_FEATURE_LLM
 static esp_err_t llm_get(httpd_req_t *req)
 {
     cJSON *o = cJSON_CreateObject();
@@ -928,6 +965,7 @@ static esp_err_t llm_test_post(httpd_req_t *req)
                                : e == ESP_ERR_TIMEOUT    ? "busy describing an event, try again"
                                                          : NULL);
 }
+#endif
 
 static esp_err_t person_get(httpd_req_t *req)
 {
@@ -955,6 +993,7 @@ static esp_err_t person_test_post(httpd_req_t *req)
     return send_json(req, person_mgr_test_json(), NULL);
 }
 
+#if CONFIG_FEATURE_EVENT_LOG
 static esp_err_t events_get(httpd_req_t *req)
 {
     char q[32], v[8];
@@ -993,6 +1032,7 @@ static esp_err_t event_snapshot_get(httpd_req_t *req)
     free(buf);
     return err;
 }
+#endif
 
 /* ------------------------------------------------------------------ WebSocket ------------- */
 
@@ -1218,20 +1258,26 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/config/export", HTTP_GET, config_export_get);
     reg(s_api, "/api/config/import", HTTP_POST, config_import_post);
     reg(s_api, "/api/coredump", HTTP_GET, coredump_get);
+#if CONFIG_FEATURE_STATS
     reg(s_api, "/api/stats", HTTP_GET, stats_get);
     reg(s_api, "/api/stats/reset", HTTP_POST, stats_reset_post);
+#endif
     reg(s_api, "/api/ai", HTTP_GET, ai_get);
     reg(s_api, "/api/ai", HTTP_POST, ai_post);
     reg(s_api, "/api/ai/test", HTTP_POST, ai_test_post);
+#if CONFIG_FEATURE_LLM
     reg(s_api, "/api/llm", HTTP_GET, llm_get);
     reg(s_api, "/api/llm", HTTP_POST, llm_post);
     reg(s_api, "/api/llm/test", HTTP_POST, llm_test_post);
+#endif
     reg(s_api, "/api/person", HTTP_GET, person_get);
     reg(s_api, "/api/person", HTTP_POST, person_post);
     reg(s_api, "/api/person/test", HTTP_POST, person_test_post);
+#if CONFIG_FEATURE_EVENT_LOG
     reg(s_api, "/api/events", HTTP_GET, events_get);
     reg(s_api, "/api/events/clear", HTTP_POST, events_clear_post);
     reg(s_api, "/api/events/snapshot", HTTP_GET, event_snapshot_get);
+#endif
     httpd_uri_t ws = {.uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true};
     ESP_ERROR_CHECK(httpd_register_uri_handler(s_api, &ws));
     httpd_register_err_handler(s_api, HTTPD_404_NOT_FOUND, not_found);

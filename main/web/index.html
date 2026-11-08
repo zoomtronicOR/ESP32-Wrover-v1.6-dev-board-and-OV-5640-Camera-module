@@ -137,6 +137,9 @@ progress{width:100%;height:14px}
       <label class="muted">Resolution <select id="qres"></select></label>
       <label class="muted">Quality <input type="number" id="qq" min="4" max="63" style="width:60px"></label>
       <label class="muted">FPS limit <input type="number" id="qfps" min="0" max="30" style="width:60px"></label>
+      <span class="muted">Rotate</span><button class="b sec" id="rotccw" title="Rotate 90° counter-clockwise">⟲ CCW</button><button class="b sec" id="rotcw" title="Rotate 90° clockwise">CW ⟳</button>
+      <label class="muted"><input type="checkbox" id="qled"> Status LED</label>
+      <label class="muted" id="qflashwrap" style="display:none">Flash LED <select id="qflash"><option value="0">Off</option><option value="1">On</option><option value="2">At night</option></select></label>
     </div>
     <p class="muted" style="margin:8px 0 0">Stream URL: <code id="streamurl"></code> · Snapshot: <code id="snapurl"></code></p>
   </div>
@@ -193,7 +196,7 @@ progress{width:100%;height:14px}
 </section>
 
 <section id="ai">
-  <div class="cols">
+  <div class="cols" id="personcards">
     <div class="card"><h2>On-device person detection <span class="muted" style="font-weight:400">— runs on the ESP32, no server</span></h2>
       <form class="f" id="pform">
         <label>Enabled</label><div><input type="checkbox" id="p_enabled" class="switch"></div>
@@ -213,7 +216,7 @@ progress{width:100%;height:14px}
       <canvas id="pcanvas" width="96" height="96" style="width:192px;height:192px;image-rendering:pixelated;border-radius:6px;background:#000"></canvas>
     </div>
   </div>
-  <div class="cols">
+  <div class="cols" id="aicards">
     <div class="card"><h2>External AI server</h2>
       <form class="f" id="aiform" autocomplete="off">
         <label>Enabled</label><div><input type="checkbox" id="ai_enabled" class="switch"></div>
@@ -239,7 +242,7 @@ progress{width:100%;height:14px}
       <div class="aitest" id="aitest"></div>
     </div>
   </div>
-  <div class="cols">
+  <div class="cols" id="llmcards">
     <div class="card"><h2>AI descriptions (vision LLM)</h2>
       <form class="f" id="llmform" autocomplete="off">
         <label>Enabled</label><div><input type="checkbox" id="l_enabled" class="switch"></div>
@@ -449,11 +452,11 @@ function showTab(id) {
   if (id === 'mqtt') loadMqtt();
   clearInterval(heatTimer);
   if (id === 'motion') loadMotion();
-  if (id === 'events') loadEvents();
+  if (id === 'events' && feat('events')) loadEvents();
   clearInterval(statsTimer);
   if (id === 'storage') loadSd();
   if (id === 'stats') { loadStats(); statsTimer = setInterval(loadStats, 30000); }
-  if (id === 'ai') { loadAi(); loadLlm(); loadPerson(); }
+  if (id === 'ai') { if (feat('ai')) loadAi(); if (feat('llm')) loadLlm(); if (feat('person')) loadPerson(); }
   clearInterval(telTimer);
   if (id === 'system') { loadSecurity(); loadOta(); loadSystem(); loadTelemetry(); telTimer = setInterval(loadTelemetry, 2000); }
   try { localStorage.setItem('tab', id); } catch (e) {}
@@ -462,8 +465,18 @@ $('nav').onclick = e => { if (e.target.dataset.tab) showTab(e.target.dataset.tab
 
 /* ---------- status / telemetry ---------- */
 function pill(name, state, title) { return `<span class="pill" title="${esc(title || '')}"><span class="dot ${state}"></span>${name}</span>`; }
+// Optional firmware modules (Kconfig FEATURE_*); absent in older firmware = available.
+const feat = k => !status || !status.features || status.features[k] !== false;
 function renderStatus(s) {
   status = s;
+  if (s.features) {
+    $('llmcards').style.display = s.features.llm === false ? 'none' : '';
+    document.querySelector('nav button[data-tab="stats"]').style.display = s.features.stats === false ? 'none' : '';
+    $('aicards').style.display = s.features.ai === false ? 'none' : '';
+    document.querySelector('nav button[data-tab="events"]').style.display = s.features.events === false ? 'none' : '';
+    $('personcards').style.display = s.features.person === false ? 'none' : '';
+    document.querySelector('nav button[data-tab="ai"]').style.display = s.features.ai === false && s.features.person === false && s.features.llm === false ? 'none' : '';
+  }
   $('authwarn').style.display = !s.auth_enabled || s.default_password ? 'block' : 'none';
   $('authwarntext').textContent = !s.auth_enabled ? '⚠ Password protection is off: anyone on your network can view and control this camera.'
     : '⚠ The factory password (admin / espadmin) is still in use. Anyone who knows it can log in.';
@@ -480,8 +493,9 @@ function renderStatus(s) {
     pill('MQTT', s.modules.mqtt === 'connecting' ? 'warn' : mod(s.modules.mqtt), s.modules.mqtt) + pill('HA', s.modules.ha === 'connecting' ? 'warn' : mod(s.modules.ha), s.modules.ha) +
     pill('Motion', s.motion && s.motion.enabled ? (s.motion.active ? 'bad' : 'ok') : '', s.motion && s.motion.active ? 'motion!' : 'idle') +
     (s.motion && s.motion.tamper && s.motion.tamper.enabled ? pill('Tamper', s.motion.tamper.state === 'alarm' ? 'bad' : s.motion.tamper.state === 'learning' ? 'warn' : 'ok', 'tamper: ' + (s.motion.tamper.state === 'alarm' ? s.motion.tamper.reason + '!' : s.motion.tamper.state)) : '') +
-    pill('Person', s.person && s.person.state !== 'off' ? (s.person.present ? 'bad' : 'ok') : '', s.person ? 'local person: ' + (s.person.present ? 'present' : s.person.state) : '') +
-    pill('SD', { ok: 'ok', mounted: 'ok', 'no card': '', ejected: 'warn' }[s.modules.sd] || '', 'SD ' + s.modules.sd) + pill('AI', { ok: 'ok', idle: 'ok', error: 'bad' }[s.modules.ai] || '', 'AI ' + s.modules.ai);
+    (feat('person') ? pill('Person', s.person && s.person.state !== 'off' ? (s.person.present ? 'bad' : 'ok') : '', s.person ? 'local person: ' + (s.person.present ? 'present' : s.person.state) : '') : '') +
+    (s.camera && s.camera.night ? pill('Night', 'ok', 'night mode, scene light ' + s.camera.light) : '') +
+    pill('SD', { ok: 'ok', mounted: 'ok', 'no card': '', ejected: 'warn' }[s.modules.sd] || '', 'SD ' + s.modules.sd) + (feat('ai') ? pill('AI', { ok: 'ok', idle: 'ok', error: 'bad' }[s.modules.ai] || '', 'AI ' + s.modules.ai) : '');
   const c = s.camera;
   const m = [
     ['Sensor', c.ok ? (c.standby ? 'standby' : 'active') : 'error'], ['Camera FPS', c.fps.toFixed(1)], ['Resolution', c.width ? c.width + '×' + c.height : '—'], ['JPEG quality', c.quality],
@@ -512,6 +526,7 @@ function renderStatus(s) {
   if (document.querySelector('#network.active')) renderNet();
   if (document.querySelector('#mqtt.active')) renderMqtt();
   renderLiveZones();
+  renderNightInfo();
   if (document.querySelector('#motion.active')) { renderMotState(); drawZones(); }
   if (document.querySelector('#ai.active')) { renderAiState(); renderLlmState(); renderPersonState(); }
 }
@@ -545,9 +560,20 @@ async function quickSet(id, v) {
 $('qres').onchange = e => quickSet('framesize', e.target.value);
 $('qq').onchange = e => quickSet('quality', e.target.value);
 $('qfps').onchange = e => quickSet('fps_limit', e.target.value);
+// Rotation in 90° steps (EXIF orientation, applied by the browser); overlays follow at once.
+async function rotateBy(d) {
+  const v = (rot() + d + 4) % 4;
+  if (status && status.camera) status.camera.rotation = v;
+  await quickSet('rotation', v); renderLiveZones(); drawZones();
+  toast(`Rotation ${v * 90}° (Camera tab → Save to keep it)`);
+}
+$('qled').onchange = e => quickSet('status_led', e.target.checked ? 1 : 0);
+$('qflash').onchange = e => quickSet('flash_led', e.target.value);
+$('rotccw').onclick = () => rotateBy(-1);
+$('rotcw').onclick = () => rotateBy(1);
 
 /* ---------- camera settings ---------- */
-const GROUPS = { module: 'Camera module (restarts camera)', stream: 'Stream / JPEG', image: 'Image', exposure: 'Exposure & gain', wb: 'White balance', dsp: 'Sensor DSP', focus: 'Autofocus', init: 'Driver (restarts camera)' };
+const GROUPS = { module: 'Camera module (restarts camera)', stream: 'Stream / JPEG', image: 'Image', exposure: 'Exposure & gain', wb: 'White balance', dsp: 'Sensor DSP', focus: 'Autofocus', night: 'Night mode (day / night)', led: 'LEDs', init: 'Driver (restarts camera)' };
 async function loadCamera() { if (!camCfg) $('camgroups').innerHTML = '<div class="card muted">loading…</div>'; try { camCfg = await api('/api/camera'); renderCamera(); } catch (e) { toast('camera: ' + e.message); } }
 function markDirty() { dirty = true; $('dirty').textContent = '● unsaved changes'; }
 function paramVal(id) { return camCfg.params.find(p => p.id === id); }
@@ -558,6 +584,11 @@ function renderCamera() {
   const fsz = paramVal('framesize');
   $('qres').innerHTML = fsz.options.map(o => `<option value="${o.v}"${o.v === fsz.value ? ' selected' : ''}>${esc(o.name)}</option>`).join('');
   $('qq').value = paramVal('quality').value; $('qfps').value = paramVal('fps_limit').value;
+  const led = paramVal('status_led'), fl = paramVal('flash_led');
+  $('qled').parentElement.style.display = led && led.supported ? '' : 'none';
+  if (led) $('qled').checked = !!led.value;
+  $('qflashwrap').style.display = fl && fl.supported ? '' : 'none';
+  if (fl) $('qflash').value = fl.value;
   if (!document.querySelector('#camera.active')) return;
   const box = $('camgroups'); box.innerHTML = '';
   for (const [g, title] of Object.entries(GROUPS)) {
@@ -572,8 +603,13 @@ function renderCamera() {
       d.innerHTML = `<button class="b sec" id="aftrig"${af.ready ? '' : ' disabled'}>Focus now</button><span class="muted">${af.ready ? (af.busy ? 'focusing…' : af.focused ? 'focused' : 'idle') : 'enable autofocus to load the AF firmware (only works on modules with a VCM lens)'}</span>`;
       card.appendChild(d);
     }
+    if (g === 'night') {
+      const d = document.createElement('p'); d.className = 'muted'; d.id = 'nightinfo';
+      card.appendChild(d);
+    }
     box.appendChild(card);
   }
+  renderNightInfo();
   const at = $('aftrig'); if (at) at.onclick = async () => { try { await api('/api/camera/af', {}); toast('focusing…'); for (let i = 1; i <= 6; i++) setTimeout(loadCamera, i * 1000); } catch (e) { toast(e.message); } };
 }
 let applyTimer = {};
@@ -589,7 +625,18 @@ function paramRow(p) {
     ctl = `<input type="range" min="${p.min}" max="${p.max}" value="${p.value}">`;
     num = `<input type="number" min="${p.min}" max="${p.max}" value="${p.value}">`;
   }
+  if (p.id === 'rotation') {
+    ctl = `<button class="b sec" type="button" data-r="-1" title="Rotate 90° counter-clockwise">⟲ CCW</button> <b class="rotdeg">${p.value * 90}°</b> <button class="b sec" type="button" data-r="1" title="Rotate 90° clockwise">CW ⟳</button>`;
+  }
   row.innerHTML = `${lab}<div>${ctl}</div><div>${num}</div><button class="rst" title="Reset to default (${p.def})">↺</button>`;
+  if (p.id === 'rotation') {
+    let cur = p.value;
+    const setRot = v => { cur = v; row.querySelector('.rotdeg').textContent = v * 90 + '°'; if (status && status.camera) status.camera.rotation = v;
+      api('/api/camera', { rotation: v }).then(r => { camCfg = r; markDirty(); row.classList.toggle('changed', v !== p.def); }).catch(e => toast(e.message)); };
+    row.querySelectorAll('[data-r]').forEach(b => b.onclick = () => setRot((cur + Number(b.dataset.r) + 4) % 4));
+    row.querySelector('.rst').onclick = () => setRot(p.def);
+    return row;
+  }
   const c = row.querySelector('select,input[type=checkbox],input[type=range]');
   const n = row.querySelector('input[type=number]');
   const send = v => {
@@ -611,6 +658,19 @@ $('camsave').onclick = async () => { try { await api('/api/camera/save', {}); di
 $('camdefaults').onclick = async () => { try { camCfg = await api('/api/camera/defaults', {}); markDirty(); renderCamera(); toast('Defaults applied (press Save to keep)'); } catch (e) { toast(e.message); } };
 $('camreload').onclick = loadCamera;
 
+/* ---------- image rotation ---------- */
+// The firmware tags each JPEG with an EXIF orientation, so the browser shows it rotated. Overlays
+// (zones, line, heatmap, AI boxes) are kept in sensor coordinates (0..1000) and mapped here.
+const rot = () => (status && status.camera && status.camera.rotation) || 0;
+function toView(x, y) { switch (rot()) { case 1: return [1000 - y, x]; case 2: return [1000 - x, 1000 - y]; case 3: return [y, 1000 - x]; default: return [x, y]; } }
+function toSensor(x, y) { switch (rot()) { case 1: return [y, 1000 - x]; case 2: return [1000 - x, 1000 - y]; case 3: return [1000 - y, x]; default: return [x, y]; } }
+function rectView(x, y, w, h) { const [a, b] = toView(x, y), [c, d] = toView(x + w, y + h); return [Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b)]; }
+function renderNightInfo() {
+  const el = $('nightinfo'), c = status && status.camera; if (!el || !c) return;
+  el.textContent = `Now: ${c.night ? 'NIGHT' : 'day'} · scene light ${c.light >= 0 ? c.light : '— (measured while the camera is streaming or analysing)'} (same units as the thresholds below). `
+    + 'In Auto the camera switches to night after 30 s below the night level and back after 60 s above the day level.';
+}
+
 /* ---------- motion ---------- */
 let motCfg = null, zones = [], heatTimer = null, heat = null, drag = null, line = null, lineMode = false;
 async function loadMotionCfg() { try { const m = await api('/api/motion'); motCfg = m.config; renderLiveZones(); return m; } catch (e) { return null; } }
@@ -625,10 +685,11 @@ function renderLiveZones() {
   const list = motCfg.zones.length ? motCfg.zones : (motCfg.enabled ? [{ name: 'Full frame', x: 0, y: 0, w: 1000, h: 1000 }] : []);
   const lst = status && status.motion && status.motion.line;
   const lineSvg = motCfg.line ? (() => { const l = motCfg.line; const X = v => ox + v / 1000 * iw, Y = v => oy + v / 1000 * ih;
-    return `<svg style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"><line x1="${X(l.x1)}" y1="${Y(l.y1)}" x2="${X(l.x2)}" y2="${Y(l.y2)}" stroke="#22d3ee" stroke-width="3"/>`
-      + `<text x="${X((l.x1 + l.x2) / 2) + 6}" y="${Y((l.y1 + l.y2) / 2) - 6}" fill="#22d3ee" font-size="12" font-family="monospace">IN ${lst ? lst.in : 0} · OUT ${lst ? lst.out : 0}</text></svg>`; })() : '';
-  box.innerHTML = lineSvg + list.map((z, i) => { const a = st[i] && st[i].active;
-    return `<div class="zone${a ? ' on' : ''}" style="left:${ox + z.x / 1000 * iw}px;top:${oy + z.y / 1000 * ih}px;width:${z.w / 1000 * iw}px;height:${z.h / 1000 * ih}px">${esc(z.name)}${st[i] ? ' ' + st[i].pct + '%' : ''}</div>`; }).join('');
+    const [x1, y1] = toView(l.x1, l.y1), [x2, y2] = toView(l.x2, l.y2);
+    return `<svg style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"><line x1="${X(x1)}" y1="${Y(y1)}" x2="${X(x2)}" y2="${Y(y2)}" stroke="#22d3ee" stroke-width="3"/>`
+      + `<text x="${X((x1 + x2) / 2) + 6}" y="${Y((y1 + y2) / 2) - 6}" fill="#22d3ee" font-size="12" font-family="monospace">IN ${lst ? lst.in : 0} · OUT ${lst ? lst.out : 0}</text></svg>`; })() : '';
+  box.innerHTML = lineSvg + list.map((z, i) => { const a = st[i] && st[i].active; const [zx, zy, zw, zh] = rectView(z.x, z.y, z.w, z.h);
+    return `<div class="zone${a ? ' on' : ''}" style="left:${ox + zx / 1000 * iw}px;top:${oy + zy / 1000 * ih}px;width:${zw / 1000 * iw}px;height:${zh / 1000 * ih}px">${esc(z.name)}${st[i] ? ' ' + st[i].pct + '%' : ''}</div>`; }).join('');
 }
 async function loadMotion() {
   const m = await loadMotionCfg(); if (!m) return;
@@ -663,7 +724,8 @@ function drawZones() {
   if (heat && $('zheat').checked && heat.cells) {
     const cw = W / heat.w, ch = H / heat.h;
     for (let i = 0; i < heat.cells.length; i++) { const q = heat.cells.charCodeAt(i) - 48; if (q < 2) continue;
-      g.fillStyle = `rgba(255,${Math.max(0, 200 - q * 22)},0,${Math.min(0.75, q / 10)})`; g.fillRect((i % heat.w) * cw, Math.floor(i / heat.w) * ch, cw + 0.5, ch + 0.5); }
+      const [hx, hy, hw, hh] = rectView((i % heat.w) * 1000 / heat.w, Math.floor(i / heat.w) * 1000 / heat.h, 1000 / heat.w, 1000 / heat.h);
+      g.fillStyle = `rgba(255,${Math.max(0, 200 - q * 22)},0,${Math.min(0.75, q / 10)})`; g.fillRect(hx / 1000 * W, hy / 1000 * H, hw / 1000 * W + 0.5, hh / 1000 * H + 0.5); }
   }
   drawLine(g, W, H, drag && drag.line ? drag : line, drag && drag.line ? '#4f8cff' : '#22d3ee');
   const st = status && status.motion ? status.motion.zones : [];
@@ -671,14 +733,16 @@ function drawZones() {
   all.forEach((z, i) => {
     const a = zones.length && st[i] && st[i].active;
     g.strokeStyle = z === drag ? '#4f8cff' : a ? '#ff3b30' : '#ffd600'; g.lineWidth = 2;
-    g.strokeRect(z.x / 1000 * W, z.y / 1000 * H, z.w / 1000 * W, z.h / 1000 * H);
-    g.fillStyle = g.strokeStyle; g.font = '12px system-ui'; g.fillText(z.name || '', z.x / 1000 * W + 4, z.y / 1000 * H + 14);
+    const [zx, zy, zw, zh] = rectView(z.x, z.y, z.w, z.h);
+    g.strokeRect(zx / 1000 * W, zy / 1000 * H, zw / 1000 * W, zh / 1000 * H);
+    g.fillStyle = g.strokeStyle; g.font = '12px system-ui'; g.fillText(z.name || '', zx / 1000 * W + 4, zy / 1000 * H + 14);
   });
 }
 // Line crossing: arrow from the midpoint along the normal (-dy, dx) = IN (flipped when inverted).
 function drawLine(g, W, H, l, color) {
   if (!l) return;
-  const x1 = l.x1 / 1000 * W, y1 = l.y1 / 1000 * H, x2 = l.x2 / 1000 * W, y2 = l.y2 / 1000 * H;
+  const [vx1, vy1] = toView(l.x1, l.y1), [vx2, vy2] = toView(l.x2, l.y2);
+  const x1 = vx1 / 1000 * W, y1 = vy1 / 1000 * H, x2 = vx2 / 1000 * W, y2 = vy2 / 1000 * H;
   g.strokeStyle = color; g.fillStyle = color; g.lineWidth = 3;
   g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
   let nx = -(y2 - y1), ny = x2 - x1; const n = Math.hypot(nx, ny) || 1; nx /= n; ny /= n;
@@ -692,7 +756,8 @@ $('lineDraw').onclick = () => { lineMode = !lineMode; $('lineDraw').textContent 
 $('lineDel').onclick = () => { line = null; drawZones(); toast('Line removed (press Save zones)'); };
 $('lineInv').onchange = () => { if (line) { line.invert = $('lineInv').checked; drawZones(); } };
 function cvPoint(e) { const r = $('zcanvas').getBoundingClientRect(); const t = e.touches ? e.touches[0] : e;
-  return { x: Math.max(0, Math.min(1000, Math.round((t.clientX - r.left) / r.width * 1000))), y: Math.max(0, Math.min(1000, Math.round((t.clientY - r.top) / r.height * 1000))) }; }
+  const [x, y] = toSensor(Math.max(0, Math.min(1000, Math.round((t.clientX - r.left) / r.width * 1000))), Math.max(0, Math.min(1000, Math.round((t.clientY - r.top) / r.height * 1000))));
+  return { x, y }; }
 function dragStart(e) {
   if (lineMode) { e.preventDefault(); const p = cvPoint(e); drag = { line: true, x1: p.x, y1: p.y, x2: p.x, y2: p.y, invert: $('lineInv').checked }; return; }
   if (zones.length >= 4) { toast('Maximum 4 zones'); return; } e.preventDefault(); const p = cvPoint(e); drag = { x0: p.x, y0: p.y, x: p.x, y: p.y, w: 0, h: 0, name: 'Zone ' + (zones.length + 1) }; }
@@ -987,9 +1052,9 @@ function renderAiState() {
   $('aistate').innerHTML = rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
 }
 function boxesHtml(objs, fw, fh, dispW, dispH, ox = 0, oy = 0) {
-  const sx = dispW / fw, sy = dispH / fh;
   return objs.map(o => { const [x1, y1, x2, y2] = o.bbox;
-    return `<div class="obox" style="left:${ox + x1 * sx}px;top:${oy + y1 * sy}px;width:${(x2 - x1) * sx}px;height:${(y2 - y1) * sy}px"><span>${esc(o.label)} ${Math.round(o.confidence * 100)}%</span></div>`; }).join('');
+    const [bx, by, bw, bh] = rectView(x1 * 1000 / fw, y1 * 1000 / fh, (x2 - x1) * 1000 / fw, (y2 - y1) * 1000 / fh);
+    return `<div class="obox" style="left:${ox + bx / 1000 * dispW}px;top:${oy + by / 1000 * dispH}px;width:${bw / 1000 * dispW}px;height:${bh / 1000 * dispH}px"><span>${esc(o.label)} ${Math.round(o.confidence * 100)}%</span></div>`; }).join('');
 }
 $('aitestbtn').onclick = async () => {
   $('aitestinfo').textContent = 'running…'; $('aitest').innerHTML = '';

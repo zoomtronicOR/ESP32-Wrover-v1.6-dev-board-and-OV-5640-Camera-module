@@ -6,6 +6,7 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "llm_mgr.h"
+#include "sdkconfig.h"
 #include "motion_mgr.h"
 #include "mqtt_mgr.h"
 #include "person_mgr.h"
@@ -49,7 +50,9 @@ cJSON *backup_export(bool secrets)
     cJSON_AddItemToObject(o, "motion", motion_mgr_config_json());
     cJSON_AddItemToObject(o, "person", person_mgr_config_json());
     cJSON_AddItemToObject(o, "ai", ai_mgr_config_export(secrets));
+#if CONFIG_FEATURE_LLM
     cJSON_AddItemToObject(o, "llm", llm_mgr_config_export(secrets));
+#endif
     cJSON_AddItemToObject(o, "mqtt", mqtt_mgr_config_export(secrets));
     if (sd_mgr_supported()) {
         cJSON_AddItemToObject(o, "storage", sd_mgr_config_json());
@@ -130,7 +133,9 @@ cJSON *backup_import(const cJSON *cfg)
     apply(r, cfg, "motion", motion_mgr_set_config);
     apply(r, cfg, "person", person_mgr_set_config);
     apply(r, cfg, "ai", ai_mgr_set_config);
+#if CONFIG_FEATURE_LLM
     apply(r, cfg, "llm", llm_mgr_set_config);
+#endif
     apply(r, cfg, "mqtt", mqtt_mgr_set_config);
     if (sd_mgr_supported()) {
         apply(r, cfg, "storage", sd_mgr_set_config);

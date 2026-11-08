@@ -23,6 +23,7 @@ static const char *const NAMES[] = {
 
 static volatile led_state_t s_state = LED_BOOT;
 static volatile bool s_streaming;
+static volatile bool s_enabled = true;
 
 static void led_write(bool on)
 {
@@ -37,7 +38,7 @@ static void led_task(void *arg)
 {
     int step = 0;
     for (;;) {
-        bool on = s_streaming ? true : (PATTERNS[s_state] >> step) & 1;
+        bool on = s_enabled && (s_streaming ? true : (PATTERNS[s_state] >> step) & 1);
         led_write(on);
         step = (step + 1) % 20;
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
@@ -57,6 +58,20 @@ void status_led_init(void)
     gpio_set_direction(CONFIG_STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
     led_write(false);
     xTaskCreate(led_task, "status_led", 2048, NULL, 1, NULL);
+#endif
+}
+
+void status_led_enable(bool enabled)
+{
+    s_enabled = enabled;
+}
+
+void status_led_flash(bool on)
+{
+#if CONFIG_CAM_BOARD_AI_THINKER
+    gpio_set_level(GPIO_NUM_4, on);
+#else
+    (void)on;
 #endif
 }
 

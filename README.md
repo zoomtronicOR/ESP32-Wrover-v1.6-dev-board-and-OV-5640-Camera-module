@@ -31,8 +31,29 @@ Detaljan opis modula, tokova podataka i memorije je u **[docs/ARHITEKTURA.md](do
 | USB / flešovanje | CH340 na ploči, auto-reset radi | ESP32-CAM-MB adapter (CH340); posle prvog flešovanja preporučen OTA |
 | Napajanje | USB | **eksterno 5 V** (vidi napomene ispod) |
 | Standby senzora | da (OV5640 power-down) | ne (OV2640 ga ne podnosi, vidi ispod) |
+| Opcione funkcije | sve uključene | lokalna osoba, eksterni AI, LLM opis, statistika i Events tab isključeni ([vidi ispod](#opcione-funkcije-izbor-pri-build-u)) |
 
-Ploča se bira u Kconfig-u (`menuconfig` → *ESP32 Camera board* → *Board*). Izbor ploče postavlja podrazumevane pinove i LED. Okruženje `esp32cam` to radi samo, preko `sdkconfig.esp32cam.defaults`.
+Ploča se bira u Kconfig-u (`menuconfig` → *ESP32 Camera board* → *Board*). Izbor ploče postavlja podrazumevane pinove, LED i opcione funkcije. Okruženje `esp32cam` to radi samo, preko `sdkconfig.esp32cam.defaults`.
+
+### Opcione funkcije (izbor pri build-u)
+
+Pojedine funkcije se biraju pri build-u (`menuconfig` → *ESP32 Camera board* → *Optional features*). Isključena funkcija se uopšte ne kompajlira: ne zauzima flash, ne troši RAM i nema task. Web UI sakriva njene tabove i kartice, a Home Assistant uklanja njene entitete.
+
+| Opcija (Kconfig) | Funkcija | WROVER | ESP32-CAM |
+|---|---|---|---|
+| `FEATURE_PERSON` | Lokalna detekcija osobe (TFLite Micro, ~360 KB flash) | uključeno | **isključeno** |
+| `FEATURE_AI` | Eksterni AI server (detekcija objekata) | uključeno | **isključeno** |
+| `FEATURE_LLM` | AI opis događaja (Ollama / Open WebUI) | uključeno | **isključeno** |
+| `FEATURE_STATS` | Statistika po satu (Stats tab) | uključeno | **isključeno** |
+| `FEATURE_EVENT_LOG` | Dnevnik događaja sa slikama (Events tab) | uključeno | **isključeno** |
+
+Na ESP32-CAM-u su isključene da bi ploča od 4 MB imala dovoljno flash-a i internog RAM-a za **stabilan rad 24/7**. Firmware tada zauzima ~72 % OTA slota (umesto ~97 %), a statički interni RAM pada sa 74 KB na 58 KB. Bez `FEATURE_EVENT_LOG` događaji i dalje idu na MQTT / Home Assistant i na SD karticu; čuva se samo mali bafer za predaju slike SD kartici.
+
+ESP32-CAM build nema ni **TLS klijent** (`CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=n`, `CONFIG_MQTT_TRANSPORT_SSL=n` u `sdkconfig.esp32cam.defaults`), pa AI server, Ollama i MQTT broker moraju biti dostupni preko običnog HTTP-a / MQTT-a u lokalnoj mreži.
+
+**Uključivanje na ESP32-CAM-u:** dodaj npr. `CONFIG_FEATURE_PERSON=y` u `sdkconfig.esp32cam.defaults` (ili izaberi u `pio run -e esp32cam -t menuconfig`), obriši `sdkconfig.esp32cam`, pa ponovo builduj i fleši. Prati veličinu firmware-a: OTA slot ima 1,875 MB.
+
+Web UI se u firmware ugrađuje **gzip-kompresovan** (101 KB → ~30 KB; pravi ga `tools/gzip_web.py` pri svakom build-u) i šalje sa `Content-Encoding: gzip`.
 
 ### Ploča 1: ESP32-WROVER-DEV v1.6 + OV5640
 
@@ -56,7 +77,7 @@ pio run -e wrover -t menuconfig   # sdkconfig / pinovi
 - **Napajanje:** napajana preko USB-a i MB adaptera, kamera nije odgovarala na SCCB magistrali, a ploča se pri uključivanju zaustavljala u download modu. Na stabilnom **eksternom napajanju od 5 V** (pin 5V i GND, bar 500 mA) sve radi. Ne napajaj je preko pina 3V3.
 - **Prvo flešovanje preko MB adaptera:** auto-reset ne radi pouzdano. Drži **IO0**, kratko pritisni **RST**, pusti IO0, pa pokreni upload. Posle upisa pritisni samo RST (ili isključi i uključi napajanje) da se pokrene firmware.
 - **Kasnije: OTA.** Kad je ploča na mreži, firmware se šalje sa System → Firmware update (`.pio/build/esp32cam/firmware.bin`), bez tastera i USB-a.
-- Firmware zauzima oko 93 % OTA slota od 1,875 MB.
+- Firmware zauzima oko 72 % OTA slota od 1,875 MB (sa podrazumevano isključenim opcionim funkcijama).
 
 ```sh
 pio run -e esp32cam                 # build
@@ -174,6 +195,7 @@ Podešava se na tabu **MQTT / HA**. Topici imaju oblik `camera/<device>/…`, gd
 | `person`, `car`, … | JSON po praćenoj klasi: `{"detected":true,"confidence":0.92,"x","y","width","height","zone","timestamp"}` (retained) |
 | `person_local` | JSON lokalne detekcije osobe `{"detected","confidence","zone","timestamp"}` (retained) |
 | `person_local/set` | `ON` / `OFF`: uključuje ili isključuje lokalnu detekciju osobe |
+| `night` | `ON` / `OFF`: noćni režim (retained) |
 | `line` | JSON brojača prelaska linije `{"in","out","last"}` (retained) |
 | `tamper` | JSON `{"state":"ON"/"OFF","reason":"covered"/"dark"/"moved"}` (retained) |
 | `description` | JSON poslednjeg događaja sa AI opisom (retained) |
@@ -195,6 +217,8 @@ Nagla promena većine slike, npr. kad se upali svetlo, ne pokreće alarm. Dok je
 Dekodiranje JPEG-a za analizu traje 200–350 ms (XGA), pa analiza ne zauzima više od oko polovine jezgra: ako traženi *Analysed FPS* ne može da se postigne, stvarni FPS se smanji (vidi se na Motion tabu kao *Analysis time*).
 
 ## Lokalna detekcija osobe (na samom ESP32)
+
+> Opcija `FEATURE_PERSON`: uključena na WROVER-u, isključena na ESP32-CAM-u.
 
 Radi bez servera i bez interneta: TensorFlow Lite Micro model „person detection“ (Apache-2.0, 96×96, ~300 KB) izvršava se na ESP32.
 - **Rezultat:** samo „osoba / nije osoba“ sa verovatnoćom, bez okvira i bez drugih klasa.
@@ -223,6 +247,8 @@ Uključuje se na Motion tabu (*Tamper detection*, podrazumevano isključeno). Ra
 
 ## AI detekcija objekata
 
+> Opcija `FEATURE_AI`: uključena na WROVER-u, isključena na ESP32-CAM-u.
+
 Klasični ESP32 je preslab za ozbiljnu lokalnu detekciju objekata (spec §42). Zato kamera šalje frame-ove na AI server u mreži, a server vraća detektovane objekte.
 - **Režimi:** samo dok traje pokret (podrazumevano) ili stalno, na zadati interval.
 - **Podržani serveri:**
@@ -231,6 +257,8 @@ Klasični ESP32 je preslab za ozbiljnu lokalnu detekciju objekata (spec §42). Z
 - **Praćenje:** objekat se prijavljuje kao `object_detected` tek kad je viđen iznad *enter* praga tokom *persistence* vremena. Ostaje prisutan dok je iznad *keep* praga, a `object_left` stiže posle *left after* vremena bez detekcije (spec §60).
 
 ## AI opis događaja (Ollama / Open WebUI)
+
+> Opcija `FEATURE_LLM`: uključena na WROVER-u, isključena na ESP32-CAM-u.
 
 Kamera može da pošalje snapshot događaja (pokret ili AI objekat) vision modelu i da opis u jednoj rečenici priloži događaju. Opis se vidi u Events tabu, na MQTT-u `…/description` i u HA senzoru „Last description“, pa se može koristiti u obaveštenjima.
 - **Ollama:** URL `http://<host>:11434/api/chat`, a model mora biti vision, npr. `qwen2.5vl:3b`, `gemma3:4b` ili `llava`.
@@ -260,6 +288,8 @@ System tab → *Configuration backup* (spec §27):
 
 ## Statistika
 
+> Opcija `FEATURE_STATS`: uključena na WROVER-u, isključena na ESP32-CAM-u.
+
 Tab **Stats** prikazuje poslednja 24 sata, po satu:
 - **Zbirovi:** događaji pokreta, osobe (lokalno), AI objekti, prelasci linije IN/OUT, tamper alarmi.
 - **Brojanje objekata** (spec §35): koliko ih je sada, danas i u poslednja 24 h, po klasi.
@@ -268,6 +298,32 @@ Tab **Stats** prikazuje poslednja 24 sata, po satu:
 - Prelaz mišem preko grafikona prikazuje vrednosti sata; *Show table* daje iste podatke kao tabelu.
 
 Statistika se čuva samo u RAM-u, jer brisanje flash-a dok kamera radi zaglavi ovu ploču. Posle restarta počinje od nule. Dok sat nije podešen, sati se broje od uključenja, a kad se vreme dobije (NTP ili browser), podaci se prebacuju na prave sate.
+
+## Rotacija slike
+
+Kad je kamera montirana bočno ili naopako, slika se okreće dugmadima **⟲ CCW** i **CW ⟳** (koraci od 90°) na Live View-u ili na Camera tabu (*Rotate image*). Da ostane posle restarta, klikni **Save** na Camera tabu.
+- Senzor sam ne može da rotira sliku, a ponovno kodiranje JPEG-a bi preopteretilo ESP32. Firmware zato u svaki frame upisuje **EXIF oznaku orijentacije** (36 bajtova), a browser i Home Assistant sliku okreću sami. To važi za stream, snapshot, slike događaja i slike na SD kartici.
+- Zone, linija za brojanje, heatmap i AI okviri se u UI-ju preslikavaju na rotiranu sliku. U firmware-u ostaju u koordinatama senzora, pa rotacija ne kvari već nacrtane zone.
+- Lokalna detekcija osobe dobija uspravan isečak.
+- Okretanje za 180° može i preko *Horizontal mirror* + *Vertical flip*, što radi sam senzor.
+- Programi koji ignorišu EXIF (npr. neki AI serveri) vide neokrenutu sliku.
+
+## Noćni režim (dan / noć)
+
+Camera tab → *Night mode* (spec §31): **Off (day)**, **On (night)** ili **Auto**.
+- **Auto** meri stvarnu osvetljenost scene: prosečnu svetlinu slike podeljenu sa ekspozicijom i pojačanjem, iz registara senzora (OV2640 i OV5640). Merenje ne zavisi od toga koliko je automatika pojačala sliku, pa nema treperenja između režima.
+- **Prebacivanje sa histerezom:** noć posle 30 s ispod praga *Night when light below*, dan posle 60 s iznad praga *Day when light above*. Trenutni nivo svetla piše na kartici, pa se pragovi lako podese prema mestu montaže.
+- **Noću:** crno-bela slika (*Black & white at night*; uklanja ljubičast/zelen šum modula bez IR filtera), najveći *Gain ceiling*, a na OV5640 i njegov noćni režim sa dužom ekspozicijom. Korisnička podešavanja ostaju netaknuta i vraćaju se danju.
+- Nivo svetla se meri dok kamera snima (stream, detekcija pokreta ili tamper). Posle standby-ja odluka se donosi odmah, pri prvom merenju.
+- Događaj `night_mode` (detalj `night`/`day`); MQTT `…/night` (`ON`/`OFF`); HA senzori „Night mode“ i „Scene light“.
+- **Kalibracija:** pragovi su u istim jedinicama kao prikazani nivo svetla. Na OV2640 (ESP32-CAM) izmereno je ~535 u osvetljenoj sobi i ~130 sa ugašenim svetlom, pa su podrazumevani pragovi **noć ispod 200, dan iznad 400**. Na OV5640 je skala drugačija (podrazumevano 5 / 15). Ako se kamera prebacuje prerano ili prekasno, pogledaj nivo svetla na kartici u oba stanja i postavi pragove između njih.
+- Za noćno snimanje u mraku treba IR osvetljenje (850 nm) i modul bez IR filtera.
+
+## LED-ovi na ploči
+
+Camera tab → *LEDs*:
+- **Status LED** (WROVER: GPIO 2, ESP32-CAM: crveni na GPIO 33) može da se isključi. Tada miruje i dok neko gleda stream.
+- **White flash LED** (samo ESP32-CAM, GPIO 4): **Off**, **On** ili **At night**, kad se pali zajedno sa noćnim režimom kao osvetljenje scene. Beli LED je jak i greje se, pa ga ne drži stalno upaljenog bez potrebe.
 
 ## Kamera, grejanje i standby
 
@@ -360,7 +416,8 @@ automation:
 - **Lokalna detekcija osobe** daje samo „osoba da/ne“. Za više klasa i okvire koristi se eksterni AI server.
 - **Prelazak linije** prati jedno težište pokreta, pa je najpouzdaniji kad kroz prolaz ide jedna osoba odjednom.
 - **Nisu urađeni:** HTTPS za web UI i MQTT preko TLS-a (kamera je predviđena za lokalnu mrežu).
-- **microSD:** WROVER ploča nema slot (GPIO 4 je kamera); microSD radi samo na ESP32-CAM-u. Firmware za ESP32-CAM zauzima oko 96 % OTA slota.
+- **microSD:** WROVER ploča nema slot (GPIO 4 je kamera); microSD radi samo na ESP32-CAM-u.
+- **Neispravan modul kamere:** fiksne vertikalne pruge koje ne zavise od rezolucije, XCLK takta ni pojačanja (a JPEG je 2–3 puta veći nego inače) dolaze iz samog modula ili njegovog kabla, ne iz podešavanja. Zamena modula je rešila problem.
 - **ESP32-CAM:** treba mu stabilno eksterno napajanje od 5 V, a za flešovanje preko USB-a IO0 + RST (vidi [Ploča 2](#ploča-2-ai-thinker-esp32-cam--ov2640)).
 - **Napajanje WROVER-a:** na slabom USB napajanju ploča posle uključivanja ponekad ne krene dok se ne pritisne RST. Snimljeni logovi pokazuju dva slučaja: brownout petlju u trenutku pokretanja Wi-Fi-ja (strujni vrhovi 400–500 mA) i čip koji uopšte ne krene (spor porast napona / EN). Firmware smanjuje opterećenje (senzor u standby-ju dok se pali Wi-Fi), a pravo rešenje je hardversko: jače napajanje od 5 V i kratak kabl, 470–1000 µF na 5V i 1–10 µF na EN pinu.
 - **Interni RAM:** Wi-Fi/TCP baferi i stekovi taskova dele oko 300 KB internog RAM-a. Kad slobodnog padne ispod 20 KB, lokalna detekcija osobe i slanje slika na MQTT se pauziraju; ako ostane ispod 12 KB 15 s, uređaj se sam restartuje (razlog „low memory (self-restart)“) umesto da ostane nedostupan. Na ESP32-CAM-u sa svim detekcijama uključenim preporučena rezolucija je do 1024×768.
@@ -371,16 +428,17 @@ automation:
 
 ```text
 main/                 firmware (ESP-IDF komponenta)
-  web/index.html      web UI (ugrađen u firmware)
+  web/index.html      web UI (u firmware se ugrađuje gzip-kompresovan)
   models/             TFLite model za detekciju osobe (Apache-2.0)
   Kconfig.projbuild   izbor ploče, pinovi kamere, LED, lozinka setup AP-a (menuconfig)
 tools/ai_server/      referentni YOLO server za eksterni AI
+tools/gzip_web.py     PlatformIO pre-build skripta: kompresuje web UI
 tools/ui_mock/        lažni backend za snimke web UI-ja (docs/screenshots)
 docs/                 arhitektura i slike interfejsa
 partitions.csv        raspored flash-a za WROVER (8 MB: 2 × 3 MB OTA, coredump, storage)
 partitions_4mb.csv    raspored flash-a za ESP32-CAM (4 MB: 2 × 1,875 MB OTA, coredump)
 sdkconfig.defaults    zajednička ESP-IDF podešavanja
-sdkconfig.esp32cam.defaults  dodaci za ESP32-CAM (ploča, 4 MB flash, particije)
+sdkconfig.esp32cam.defaults  dodaci za ESP32-CAM (ploča, 4 MB flash, particije, bez TLS klijenta)
 platformio.ini        PlatformIO okruženja `wrover` i `esp32cam` (COM port, flash, particije)
 ```
 
@@ -401,10 +459,14 @@ platformio.ini        PlatformIO okruženja `wrover` i `esp32cam` (COM port, fla
 - [x] **Rezervna kopija podešavanja** (§27): izvoz/uvoz u JSON, lozinke samo uz izričitu opciju
 - [x] **Autofokus OV5640** (continuous i single), pristup registrima senzora (`/api/camera/reg`)
 - [x] **Resursi:** trake iskorišćenosti (CPU, RAM, PSRAM, DMA, particija, NVS, stream slotovi, Wi-Fi) na System tabu
+- [x] **Rotacija slike** po 90° (EXIF orijentacija, overlay-i se preslikavaju)
+- [x] **Automatski dan/noć** (§31): merenje svetla iz senzora, histereza, crno-bela slika noću, HA senzori; kalibrisano na OV2640
+- [x] **Prekidači za LED-ove:** status LED, beli blic LED (Off / On / At night) na ESP32-CAM-u
+- [x] **Opcione funkcije pri build-u** i gzip web UI: ESP32-CAM na ~72 % OTA slota, više internog RAM-a za rad 24/7
 
 **Sledeće:**
 - [ ] Privacy mode (§29)
-- [ ] Profili scene i automatski dan/noć (§28, §31)
+- [ ] Profili scene (§28), IR LED / IR-cut preko GPIO (§31)
 - [ ] GPIO i spoljni senzori (§30), remote syslog (§39)
 - [ ] HTTPS za web UI i MQTT preko TLS-a
 

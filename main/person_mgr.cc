@@ -280,6 +280,21 @@ bool prepare_input(const cam_frame_t *f, bool use_blob, int crop_out[4])
             s_gray[oy * kSize + ox] = sum / n;
         }
     }
+    // The model expects upright people: turn the crop like the view (camera mounted rotated).
+    int rot = cam_mgr_rotation() & 3;
+    if (rot) {
+        static uint8_t tmp[kSize * kSize];
+        memcpy(tmp, s_gray, sizeof(tmp));
+        for (int y = 0; y < kSize; y++) {
+            for (int x = 0; x < kSize; x++) {
+                int sx = x, sy = y;  // source pixel shown at (x, y) after a clockwise rotation
+                if (rot == 1) { sx = y; sy = kSize - 1 - x; }
+                else if (rot == 2) { sx = kSize - 1 - x; sy = kSize - 1 - y; }
+                else { sx = kSize - 1 - y; sy = x; }
+                s_gray[y * kSize + x] = tmp[sy * kSize + sx];
+            }
+        }
+    }
     return true;
 }
 

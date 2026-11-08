@@ -32,7 +32,7 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Podržane su dve
 | `mqtt_mgr.c` | MQTT klijent i HA discovery; sve operacije nad klijentom rade u jednom worker task-u, ostali moduli samo šalju komande u red |
 | `event_mgr.c` | Centralni event engine: neblokirajući red, 64 događaja u PSRAM-u, snapshot-i za poslednjih 12, slanje na MQTT, WebSocket i log, do 4 listenera (LLM opisi, statistika) |
 | `motion_mgr.c` | Detekcija pokreta: JPEG se dekodira u razmeri 1:8 u mrežu 96×72, poređenje sa prilagodljivom pozadinom, kompenzacija osvetljenja, do 4 zone, prelazak linije (težište promena, histereza), tamper (mapa ivica naspram reference: prekrivena / pomerena). Analiza odmara bar onoliko koliko je radila, pa ne zauzima više od ~polovine core 1; sam tamper radi na 1 fps |
-| `person_mgr.cc` | Lokalna detekcija osobe: TFLite Micro model 96×96, isečak oko pokreta, potvrda i timeout |
+| `person_mgr.cc` | Lokalna detekcija osobe: TFLite Micro model 96×96, isečak oko pokreta (uspravan i kad je slika rotirana), potvrda i timeout. Opciono (`FEATURE_PERSON`) |
 | `ai_mgr.c` | Eksterni AI: POST JPEG-a na server (generički ili DeepStack/CodeProject.AI), praćenje objekata sa histerezom |
 | `llm_mgr.c` | Opis događaja vision LLM-om (Ollama `/api/chat` ili OpenAI-kompatibilni API), cooldown, bez gomilanja zahteva |
 | `stats_mgr.c` | Statistika: 24 satna bucket-a u RAM-u, brojači iz događaja i uzorci zdravlja na 10 s; sati po uptime-u dok se ne podesi sat |
@@ -42,7 +42,16 @@ Firmware je ESP-IDF 5.3 aplikacija, buildovana kroz PlatformIO. Podržane su dve
 | `status_led.c` | Statusni LED (GPIO 2 na WROVER-u, GPIO 33 aktivan na niskom nivou na ESP32-CAM-u); na ESP32-CAM-u gasi i beli blic LED (GPIO 4) |
 | `console_cmds.c` | Serijska konzola (UART, 115200) |
 | `app_config.c` | NVS inicijalizacija, Wi-Fi i sistemska podešavanja, factory reset, brojač boot-ova |
-| `web/index.html` | Ceo web UI (vanilla JS, ugrađen u firmware) |
+| `web/index.html` | Ceo web UI (vanilla JS). U firmware se ugrađuje gzip-kompresovan (`tools/gzip_web.py`, ~30 KB) i šalje sa `Content-Encoding: gzip`. Overlay-e (zone, linija, heatmap, AI okviri) drži u koordinatama senzora i preslikava ih na rotiranu sliku |
+
+## Opcioni moduli
+
+`ai_mgr.c`, `person_mgr.cc` (sa modelom), `llm_mgr.c` i `stats_mgr.c` se kompajliraju samo uz Kconfig opcije `FEATURE_AI`, `FEATURE_PERSON`, `FEATURE_LLM` i `FEATURE_STATS` (`main/CMakeLists.txt`). Kad je `ai_mgr` ili `person_mgr` isključen, njegovo zaglavlje daje male inline zamene (stanje „off“, prazan JSON), pa ostatak koda ostaje isti. `FEATURE_EVENT_LOG` smanjuje dnevnik događaja na mali bafer za SD karticu i uklanja `/api/events`. `/api/status` → `features` javlja UI-ju šta postoji, a MQTT discovery briše entitete isključenih modula. Na ESP32-CAM-u su sve ove opcije podrazumevano isključene (stabilnost 24/7, flash i interni RAM).
+
+## Rotacija i dan/noć (`camera_mgr.c`)
+
+- **Rotacija:** parametar `rotation` (0–3 × 90° u smeru kazaljke). `hub_publish()` posle SOI markera umeće EXIF APP1 segment sa Orientation tagom (1/6/3/8), pa slika ne mora ponovo da se kodira. Dekoderi za analizu (tjpgd) taj segment preskaču.
+- **Dan/noć:** `sensor_light10()` računa svetlost scene kao prosečnu svetlinu podeljenu sa ekspozicijom i pojačanjem (OV5640: 0x56A1, 0x3500–2, 0x350A; OV2640, banka senzora: YAVG 0x2F, AEC 0x45/0x10/0x04, gain 0x00). `night_tick()` iz capture task-a (na 2 s) primenjuje histerezu: 30 s ispod praga za noć, 60 s iznad praga za dan. `night_apply()` stavlja noćni profil preko korisničkih vrednosti (crno-belo, najveći gain ceiling, OV5640 0x3A00 bit 2), a da `s_val` ostaje netaknut. Profil se ponovo primenjuje posle restarta drajvera.
 
 ## Tokovi i pravila
 

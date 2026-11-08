@@ -16,4 +16,8 @@ typedef enum {
 void status_led_init(void);
 void status_led_set(led_state_t state);
 void status_led_set_streaming(bool active);
+// User switch: when disabled the status LED stays dark (also while streaming).
+void status_led_enable(bool enabled);
+// White flash LED of the AI-Thinker ESP32-CAM (GPIO 4); no-op on other boards.
+void status_led_flash(bool on);
 const char *status_led_state_name(void);

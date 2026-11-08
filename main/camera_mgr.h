@@ -67,6 +67,11 @@ esp_err_t cam_mgr_restart(void);
 // Stops the camera driver completely (e.g. during OTA: camera DMA/interrupts and long flash
 // writes with the cache disabled trip the interrupt watchdog on the ESP32 + PSRAM). Resume re-inits.
 void cam_mgr_suspend(bool suspend);
+// Day/night (spec §31): true while the night profile is applied; scene light x10 (-1 unknown).
+bool cam_mgr_night(void);
+int cam_mgr_light10(void);
+// View rotation 0..3 (x 90 degrees clockwise), carried in each JPEG as an EXIF orientation tag.
+int cam_mgr_rotation(void);
 // Driver counters, frame pool usage and live sensor registers (exposure, gain, AWB...).
 cJSON *cam_mgr_telemetry_json(void);
 // Hardware check for a sensor that is not detected: powers it up (PWDN low), drives XCLK and

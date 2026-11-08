@@ -85,6 +85,32 @@ menu "ESP32 Camera board"
         default n if CAM_BOARD_AI_THINKER
         default y
 
+    comment "Optional features (off on the 4 MB ESP32-CAM: flash space and RAM for 24/7 stability)"
+
+    config FEATURE_AI
+        bool "External AI object detection (HTTP AI server)"
+        default n if CAM_BOARD_AI_THINKER
+        default y
+    config FEATURE_PERSON
+        bool "On-device person detection (TFLite Micro, ~360 KB flash)"
+        default n if CAM_BOARD_AI_THINKER
+        default y
+    config FEATURE_EVENT_LOG
+        bool "Event log with snapshots (Events tab)"
+        default n if CAM_BOARD_AI_THINKER
+        default y
+        help
+            Without it events still go to MQTT / Home Assistant and the SD card, but only a
+            minimal buffer (for the SD hand-off) is kept and the Events tab is hidden.
+    config FEATURE_LLM
+        bool "AI event descriptions (vision LLM via Ollama / Open WebUI)"
+        default n if CAM_BOARD_AI_THINKER
+        default y
+    config FEATURE_STATS
+        bool "Hourly statistics (Stats tab)"
+        default n if CAM_BOARD_AI_THINKER
+        default y
+
     config SETUP_AP_PASSWORD
         string "Password of the setup access point (min 8 chars)"
         default "esp32camera"

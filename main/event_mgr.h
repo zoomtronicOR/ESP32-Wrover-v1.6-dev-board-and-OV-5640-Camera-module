@@ -26,6 +26,7 @@ typedef enum {
     EV_LINE_OUT,
     EV_PERSON_LOCAL,        // on-device person detection, value = confidence %
     EV_PERSON_LOCAL_LEFT,
+    EV_NIGHT_MODE,          // detail = "night" / "day", value = scene light
     EV_OTA_STARTED,
     EV_OTA_FINISHED,     // value 1 = ok, 2 = rollback, 0 = failed (detail = reason)
     EV_TAMPER,           // detail = covered / moved, value = edge or mismatch %

@@ -602,12 +602,22 @@ static void ai_task(void *arg)
 
 /* ------------------------------------------------------------------ public API ------------ */
 
+// The task (6 KB of internal RAM for its stack) only exists once AI has been enabled: internal
+// RAM is what Wi-Fi needs, and most installations never turn the external AI on.
+static void ensure_task(void)
+{
+    static TaskHandle_t task;
+    if (!task && s_cfg.enabled) {
+        xTaskCreatePinnedToCore(ai_task, "ai", 6144, NULL, 3, &task, 1);
+    }
+}
+
 esp_err_t ai_mgr_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
     load_config();
     rebuild_tracks();
-    xTaskCreatePinnedToCore(ai_task, "ai", 6144, NULL, 3, NULL, 1);
+    ensure_task();
     ESP_LOGI(TAG, "external AI %s (%s)", s_cfg.enabled ? "enabled" : "disabled", s_cfg.url[0] ? s_cfg.url : "no server");
     return ESP_OK;
 }
@@ -684,6 +694,7 @@ esp_err_t ai_mgr_set_config(const cJSON *cfg, char *err, size_t err_len)
         rebuild_tracks();
     }
     xSemaphoreGive(s_lock);
+    ensure_task();
     esp_err_t e = save_config(&n);
     if (e != ESP_OK) {
         snprintf(err, err_len, "saving failed: %s", esp_err_to_name(e));
