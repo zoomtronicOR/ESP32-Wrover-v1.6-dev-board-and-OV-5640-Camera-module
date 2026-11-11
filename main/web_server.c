@@ -218,6 +218,11 @@ cJSON *web_status_json(void)
 #else
     cJSON_AddBoolToObject(feat, "stats", false);
 #endif
+#ifdef CONFIG_FEATURE_MOTION
+    cJSON_AddBoolToObject(feat, "motion", true);
+#else
+    cJSON_AddBoolToObject(feat, "motion", false);
+#endif
     cJSON_AddItemToObject(o, "person", person_mgr_state_json());
 
     // Modules from later phases report their state here once implemented.
@@ -743,6 +748,7 @@ static esp_err_t wifi_scan_post(httpd_req_t *req)
 
 /* ------------------------------------------------------------------ API: motion/events ---- */
 
+#if CONFIG_FEATURE_MOTION
 static esp_err_t motion_get(httpd_req_t *req)
 {
     cJSON *o = cJSON_CreateObject();
@@ -763,6 +769,7 @@ static esp_err_t motion_post(httpd_req_t *req)
     cJSON_Delete(body);
     return send_result(req, e, err[0] ? err : NULL);
 }
+#endif
 
 /* ------------------------------------------------------------------ API: microSD ---------- */
 
@@ -905,10 +912,12 @@ static esp_err_t stats_reset_post(httpd_req_t *req)
 }
 #endif
 
+#if CONFIG_FEATURE_MOTION
 static esp_err_t motion_debug_get(httpd_req_t *req)
 {
     return send_json(req, motion_mgr_debug_json(), NULL);
 }
+#endif
 
 static esp_err_t ai_get(httpd_req_t *req)
 {
@@ -1034,6 +1043,7 @@ static esp_err_t event_snapshot_get(httpd_req_t *req)
 }
 #endif
 
+#if CONFIG_FEATURE_TELEMETRY
 /* ------------------------------------------------------------------ WebSocket ------------- */
 
 static esp_err_t ws_handler(httpd_req_t *req)
@@ -1114,6 +1124,11 @@ static void ws_push_task(void *arg)
         }
     }
 }
+
+#else
+// Live telemetry left out of this build (Kconfig FEATURE_TELEMETRY): the UI polls /api/status.
+void web_ws_broadcast_json(const cJSON *json) { (void)json; }
+#endif
 
 /* ------------------------------------------------------------------ MJPEG stream ---------- */
 
@@ -1248,9 +1263,11 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/mqtt", HTTP_GET, mqtt_get);
     reg(s_api, "/api/mqtt", HTTP_POST, mqtt_post);
     reg(s_api, "/api/mqtt/discovery", HTTP_POST, mqtt_discovery_post);
+#if CONFIG_FEATURE_MOTION
     reg(s_api, "/api/motion", HTTP_GET, motion_get);
     reg(s_api, "/api/motion", HTTP_POST, motion_post);
     reg(s_api, "/api/motion/debug", HTTP_GET, motion_debug_get);
+#endif
     reg(s_api, "/api/sd", HTTP_GET, sd_get);
     reg(s_api, "/api/sd", HTTP_POST, sd_post);
     reg(s_api, "/api/sd/files", HTTP_GET, sd_files_get);
@@ -1278,8 +1295,10 @@ esp_err_t web_server_start(void)
     reg(s_api, "/api/events/clear", HTTP_POST, events_clear_post);
     reg(s_api, "/api/events/snapshot", HTTP_GET, event_snapshot_get);
 #endif
+#if CONFIG_FEATURE_TELEMETRY
     httpd_uri_t ws = {.uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true};
     ESP_ERROR_CHECK(httpd_register_uri_handler(s_api, &ws));
+#endif
     httpd_register_err_handler(s_api, HTTPD_404_NOT_FOUND, not_found);
 
     httpd_config_t scfg = HTTPD_DEFAULT_CONFIG();
@@ -1292,7 +1311,9 @@ esp_err_t web_server_start(void)
     ESP_ERROR_CHECK(httpd_start(&s_stream, &scfg));
     reg_public(s_stream, "/stream", HTTP_GET, stream_get);  // checks auth itself
 
+#if CONFIG_FEATURE_TELEMETRY
     xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, NULL);
+#endif
     ESP_LOGI(TAG, "web UI on port 80, MJPEG stream on port 81");
     return ESP_OK;
 }

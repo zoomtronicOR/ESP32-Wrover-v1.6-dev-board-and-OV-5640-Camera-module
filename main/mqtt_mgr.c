@@ -316,6 +316,7 @@ static void publish_discovery(void)
     add_button("reboot", "Reboot", "reboot", "restart", false);
     add_button("restart_camera", "Restart camera", "restart_camera", "restart", false);
 
+#if CONFIG_FEATURE_MOTION
     // Motion (spec §15): overall sensor, enable switch, events counter and one sensor per zone slot.
     cJSON *mot = entity("motion", "Motion", NULL);
     topic(t, "motion");
@@ -360,6 +361,20 @@ static void publish_discovery(void)
     cJSON_AddStringToObject(tp, "device_class", "tamper");
     cJSON_AddStringToObject(tp, "json_attributes_topic", t);
     announce("binary_sensor", "tamper", tp);
+#else
+    // Left out of this build: remove entities an earlier firmware announced.
+    unannounce("binary_sensor", "motion");
+    unannounce("switch", "motion_detection");
+    unannounce("sensor", "motion_events_today");
+    for (int i = 1; i <= 4; i++) {
+        char object[16];
+        snprintf(object, sizeof(object), "motion_zone%d", i);
+        unannounce("binary_sensor", object);
+    }
+    unannounce("binary_sensor", "tamper");
+    unannounce("sensor", "line_in_today");
+    unannounce("sensor", "line_out_today");
+#endif
 
 #if CONFIG_FEATURE_PERSON
     // On-device person detection.
@@ -394,8 +409,10 @@ static void publish_discovery(void)
     cJSON_AddStringToObject(nm, "icon", "mdi:weather-night");
     announce("binary_sensor", "night_mode", nm);
     add_sensor("scene_light", "Scene light", "{{ value_json.light }}", NULL, NULL, true);
+#if CONFIG_FEATURE_MOTION
     add_sensor("line_in_today", "Line in today", "{{ value_json.line_in }}", NULL, NULL, false);
     add_sensor("line_out_today", "Line out today", "{{ value_json.line_out }}", NULL, NULL, false);
+#endif
 
 #if CONFIG_FEATURE_AI
     // External AI (spec §15): switch, last object and one binary sensor per tracked label.
@@ -720,6 +737,7 @@ static void on_connected(void)
     esp_mqtt_client_subscribe(s_client, t, 1);
     topic(t, "person_local/set");
     esp_mqtt_client_subscribe(s_client, t, 1);
+#if CONFIG_FEATURE_MOTION
     topic(t, "motion");
     esp_mqtt_client_publish(s_client, t, motion_mgr_active() ? "ON" : "OFF", 0, s_cfg.qos, true);
     const char *tamper = motion_mgr_tamper();
@@ -727,6 +745,7 @@ static void on_connected(void)
     snprintf(tjs, sizeof(tjs), "{\"state\":\"%s\",\"reason\":\"%s\"}", tamper ? "ON" : "OFF", tamper ? tamper : "");
     topic(t, "tamper");
     esp_mqtt_client_publish(s_client, t, tjs, 0, s_cfg.qos, true);
+#endif
     if (s_cfg.discovery) {
         snprintf(t, sizeof(t), "%s/status", s_cfg.disc_prefix);
         esp_mqtt_client_subscribe(s_client, t, 1);

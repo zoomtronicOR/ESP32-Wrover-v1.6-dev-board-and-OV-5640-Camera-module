@@ -6,7 +6,6 @@ set(srcs "main.c"
                             "camera_mgr.c"
                             "console_cmds.c"
                             "event_mgr.c"
-                            "motion_mgr.c"
                             "status_led.c"
                             "sd_mgr.c"
                             "sysmon.c"
@@ -22,6 +21,9 @@ if(CONFIG_FEATURE_PERSON)
 endif()
 if(CONFIG_FEATURE_LLM)
     list(APPEND srcs "llm_mgr.c")
+endif()
+if(CONFIG_FEATURE_MOTION)
+    list(APPEND srcs "motion_mgr.c")
 endif()
 if(CONFIG_FEATURE_STATS)
     list(APPEND srcs "stats_mgr.c")

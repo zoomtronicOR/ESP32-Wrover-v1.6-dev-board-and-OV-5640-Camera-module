@@ -110,6 +110,21 @@ menu "ESP32 Camera board"
         bool "Hourly statistics (Stats tab)"
         default n if CAM_BOARD_AI_THINKER
         default y
+    config FEATURE_MOTION
+        bool "Motion detection, zones, line crossing and tamper (Motion tab)"
+        default n if CAM_BOARD_AI_THINKER
+        default y
+        help
+            Without it there is no frame-difference analysis task and no motion, tamper or
+            line entities in Home Assistant. "Only while motion" modes of AI / person
+            detection never trigger.
+    config FEATURE_TELEMETRY
+        bool "WebSocket live telemetry (/ws push of status and events every second)"
+        default n if CAM_BOARD_AI_THINKER
+        default y
+        help
+            Without it the web UI polls /api/status instead (only while its tab is visible)
+            and event toasts are not pushed. Saves the ws_push task and WebSocket sockets.
 
     config SETUP_AP_PASSWORD
         string "Password of the setup access point (min 8 chars)"
